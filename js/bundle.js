@@ -15090,7 +15090,9 @@ Output ONLY the raw essay text. Do not include a title, heading, introduction, w
  * FluentEdge Speaking & Pronunciation Evaluation Engine
  * Uses Web Speech Recognition for live spoken analysis,
  * Web Speech Synthesis for native British English model pronunciation,
- * and Web Audio API for real-time waveform visualization.
+ * Web Audio API for real-time waveform visualization,
+ * and a dedicated Kokoro ONNX Web Worker (off-main-thread neural TTS)
+ * with a static pre-rendered audio asset fast-path for 0ms vocab playback.
  */
 class SpeechEngine {
   constructor() {
@@ -15110,10 +15112,11 @@ class SpeechEngine {
     this.targetTokens = []; // Array of word objects { text, clean, status: 'pending'|'matched'|'deviation'|'omitted' }
     this.spokenTranscripts = [];
     this.currentWordIndex = 0;
+    this.confirmedWordIndex = 0;
 
     // Kokoro Neural TTS & Multi-Voice Engine State
-    this.currentVoiceId = 'bf_isabella'; // Default: UK English Female (Isabella: Feminine & Mellow)
-    this.currentAccent = 'uk';       // 'uk' | 'us'
+    this.currentVoiceId = 'af_heart'; // Default: US English Female (Heart: Feminine & Mellow)
+    this.currentAccent = 'us';       // 'uk' | 'us'
     this.currentGender = 'female';   // 'female' | 'male'
     this.engineMode = 'neural';      // 'neural' | 'native'
     try {
@@ -15128,6 +15131,39 @@ class SpeechEngine {
     this.warmedVoices = new Set();
     this.isPrecaching = false;
     this.vocabPrecacheList = [];
+
+    // ── Phase 1: Web Worker Offload ────────────────────────────────
+    // kokoro-worker.js runs all ONNX inference off the main thread.
+    // Messages follow the { type, id, ... } protocol defined in the worker.
+    this.worker = null;
+    this.workerReady = false;
+    this.workerLoading = false;
+    this._workerPending = new Map(); // requestId → { resolve, reject, onStart }
+    this._workerReqId = 0;
+
+    // ── Phase 1: Static Pre-rendered Audio Asset Fast-Path ──────────
+    // Try fetching audio/vocab/{voiceId}/{word}.webm before synthesis.
+    // Resolve the base URL relative to the current page origin.
+    this.staticAudioBase = (() => {
+      try {
+        // Works for both http://localhost and file://
+        const base = window.location.href.replace(/\/[^/]*$/, '');
+        return `${base}/audio/vocab`;
+      } catch (e) {
+        return './audio/vocab';
+      }
+    })();
+
+    // ── Phase 1: IndexedDB Audio Cache ─────────────────────────────
+    // Persists Worker-synthesized blobs so non-Isabella voices are
+    // instant on the second click (cleared only by user clearing site data).
+    this._idb = null;
+    this._idbReady = false;
+    this.initIndexedDB();
+
+    // ── Phase 1: Tactile Click Sound ───────────────────────────────
+    // Tiny synthesized 'tap' played at t=0 so the button feels instant.
+    this._clickBuffer = null; // Lazy-created on first use
 
     // Callbacks
     this.onWordUpdate = null;
@@ -15154,7 +15190,8 @@ class SpeechEngine {
     this.recognition = new SpeechRecognition();
     this.recognition.continuous = true;
     this.recognition.interimResults = true;
-    this.recognition.lang = 'en-GB'; // British English standard
+    this.recognition.maxAlternatives = 1; // Prioritize fastest 1-best decode over multi-hypothesis serialization
+    this.recognition.lang = 'en-US'; // American English standard (matches default af_heart voice)
 
     this.recognition.onstart = () => {
       this.isListening = true;
@@ -15164,21 +15201,23 @@ class SpeechEngine {
     };
 
     this.recognition.onresult = (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
+      let finalChunk = '';
+      let interimChunk = '';
 
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscript += transcript + ' ';
+          finalChunk += transcript + ' ';
         } else {
-          interimTranscript += transcript;
+          interimChunk += transcript;
         }
       }
 
-      const activeText = (finalTranscript + ' ' + interimTranscript).trim();
-      if (activeText) {
-        this.processSpokenSpeech(activeText);
+      if (finalChunk.trim()) {
+        this.processSpokenSpeech(finalChunk.trim(), true);
+      }
+      if (interimChunk.trim()) {
+        this.processSpokenSpeech(interimChunk.trim(), false);
       }
     };
 
@@ -15215,6 +15254,349 @@ class SpeechEngine {
     };
   }
 
+  // ================================================================
+  // PHASE 1: WEB WORKER OFFLOAD
+  // ================================================================
+
+  /**
+   * Initialise the Kokoro ONNX Web Worker.
+   * Called once when neural mode is activated for the first time.
+   * The Worker loads the model in its own thread — zero main-thread CPU.
+   */
+  initWorker() {
+    if (this.worker || this.workerLoading) return;
+    this.workerLoading = true;
+
+    try {
+      this.worker = new Worker('./js/workers/kokoro-worker.js');
+    } catch (e) {
+      // Worker constructor can fail on some file:// environments;
+      // gracefully degrade to legacy main-thread Kokoro path.
+      console.warn('[SpeechEngine] Could not create Worker:', e);
+      this.workerLoading = false;
+      return;
+    }
+
+    this.worker.onmessage = (event) => {
+      const msg = event.data;
+      if (!msg) return;
+
+      switch (msg.type) {
+        case 'ready':
+          this.workerReady = true;
+          this.workerLoading = false;
+          this.isKokoroReady = true;
+          this.updateEngineStatus(
+            this.engineMode === 'neural' ? 'ready' : 'fallback',
+            this.engineMode === 'neural' ? 'Kokoro Neural (Worker)' : 'Fast Native (0ms)'
+          );
+          break;
+
+        case 'init_failed':
+          this.workerLoading = false;
+          this.workerReady = false;
+          console.warn('[SpeechEngine] Worker init failed:', msg.message);
+          // Fall back to legacy main-thread Kokoro
+          this.initKokoroLegacy();
+          break;
+
+        case 'audio': {
+          // Resolve the pending synthesis promise with the returned blob
+          const pending = this._workerPending.get(msg.id);
+          if (pending) {
+            this._workerPending.delete(msg.id);
+            pending.resolve(msg.blob);
+          }
+          break;
+        }
+
+        case 'error': {
+          const pending = this._workerPending.get(msg.id);
+          if (pending) {
+            this._workerPending.delete(msg.id);
+            pending.reject(new Error(msg.message));
+          }
+          break;
+        }
+
+        case 'status':
+          // Propagate Worker status messages to the UI engine indicator
+          if (msg.state !== 'synthesizing' || !this.workerReady) {
+            this.updateEngineStatus(msg.state, msg.message);
+          }
+          break;
+
+        default:
+          break;
+      }
+    };
+
+    this.worker.onerror = (err) => {
+      console.error('[SpeechEngine] Worker error:', err);
+      this.workerLoading = false;
+      this.workerReady = false;
+    };
+
+    // Tell the Worker to start loading the model
+    this.worker.postMessage({ type: 'init' });
+  }
+
+  /**
+   * Synthesise text via the off-thread Worker.
+   * Returns a Promise<Blob> that resolves when the Worker is done.
+   */
+  _workerSynthesize(text, voiceId, speed) {
+    return new Promise((resolve, reject) => {
+      if (!this.worker || !this.workerReady) {
+        reject(new Error('Worker not ready'));
+        return;
+      }
+      const id = ++this._workerReqId;
+      this._workerPending.set(id, { resolve, reject });
+      this.worker.postMessage({ type: 'synthesize', id, text, voiceId, speed });
+    });
+  }
+
+  // ================================================================
+  // PHASE 1: INDEXEDDB AUDIO CACHE
+  // ================================================================
+
+  /**
+   * Open (or create) the IndexedDB database for persisting synthesized audio blobs.
+   * Non-Isabella voices are expensive to synthesize; IDB ensures instant repeat clicks.
+   */
+  initIndexedDB() {
+    if (!window.indexedDB) return;
+    try {
+      const req = indexedDB.open('fluentedge-audio', 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('vocab-audio')) {
+          db.createObjectStore('vocab-audio');
+        }
+      };
+      req.onsuccess = (e) => {
+        this._idb = e.target.result;
+        this._idbReady = true;
+      };
+      req.onerror = () => {
+        // IDB unavailable (e.g. private mode Firefox); silently skip caching
+        this._idbReady = false;
+      };
+    } catch (e) {
+      this._idbReady = false;
+    }
+  }
+
+  /** Read a Blob from IndexedDB by key. Returns Promise<Blob|null>. */
+  _idbGet(key) {
+    return new Promise((resolve) => {
+      if (!this._idbReady || !this._idb) { resolve(null); return; }
+      try {
+        const tx = this._idb.transaction('vocab-audio', 'readonly');
+        const req = tx.objectStore('vocab-audio').get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => resolve(null);
+      } catch (e) { resolve(null); }
+    });
+  }
+
+  /** Write a Blob to IndexedDB. Fire-and-forget. */
+  _idbSet(key, blob) {
+    if (!this._idbReady || !this._idb) return;
+    try {
+      const tx = this._idb.transaction('vocab-audio', 'readwrite');
+      tx.objectStore('vocab-audio').put(blob, key);
+    } catch (e) { /* silent */ }
+  }
+
+  // ================================================================
+  // PHASE 1: STATIC ASSET FAST-PATH
+  // ================================================================
+
+  /**
+   * Attempt to fetch a pre-rendered static .webm from audio/vocab/{voiceId}/{word}.webm
+   * Returns a Blob on success, null on 404 or network error.
+   */
+  async _fetchStaticAudio(word, voiceId) {
+    const safe = word.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (!safe) return null;
+    const url = `${this.staticAudioBase}/${voiceId}/${safe}.webm`;
+    try {
+      const resp = await fetch(url, { method: 'GET', cache: 'force-cache' });
+      if (resp.ok) {
+        return await resp.blob();
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ================================================================
+  // PHASE 1: TACTILE CLICK SOUND
+  // ================================================================
+
+  /**
+   * Play a soft, instantaneous 'tap' click sound so the button feels
+   * responsive before the neural audio arrives.
+   * Uses Web Audio API so latency is sub-5ms regardless of OS audio stack.
+   */
+  playTactileClick() {
+    try {
+      // Lazily create (or reuse) a shared AudioContext for UI sounds
+      if (!this.effectsAudioContext || this.effectsAudioContext.state === 'closed') {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        this.effectsAudioContext = new AudioCtx();
+      }
+      const ctx = this.effectsAudioContext;
+      if (ctx.state === 'suspended') ctx.resume();
+
+      // Synthesise a short, gentle click envelope in-band (no file fetch)
+      // Decays from 0.18 to 0 over 45ms — sounds like a soft mechanical key press
+      const bufLen = Math.floor(ctx.sampleRate * 0.045);
+      if (!this._clickBuffer || this._clickBuffer.length !== bufLen) {
+        this._clickBuffer = ctx.createBuffer(1, bufLen, ctx.sampleRate);
+        const data = this._clickBuffer.getChannelData(0);
+        for (let i = 0; i < bufLen; i++) {
+          const t = i / bufLen;
+          // White noise × exponential decay
+          data[i] = (Math.random() * 2 - 1) * 0.18 * Math.exp(-t * 28);
+        }
+      }
+
+      const src = ctx.createBufferSource();
+      src.buffer = this._clickBuffer;
+
+      // Apply gentle high-pass to keep it crisp, not boomy
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 800;
+
+      const gain = ctx.createGain();
+      gain.gain.value = 0.55;
+
+      src.connect(hp);
+      hp.connect(gain);
+      gain.connect(ctx.destination);
+      src.start();
+    } catch (e) {
+      // Non-critical — silently skip if Web Audio unavailable
+    }
+  }
+
+  // ================================================================
+  // PHASE 1: HYBRID VOCAB PLAYBACK  (speakVocabWord)
+  // ================================================================
+
+  /**
+   * Play pronunciation audio for a vocabulary word using the 3-tier hybrid pipeline:
+   *
+   *   Tier 1 (0ms)      – Tactile click feedback via Web Audio API
+   *   Tier 2 (instant)  – Pre-rendered static .webm asset (HTTP cache)
+   *   Tier 3 (fallback) – Kokoro Worker synthesis → IndexedDB cache → play
+   *
+   * @param {string}   word           - The vocabulary headword to pronounce
+   * @param {number}   [speed=0.85]   - Synthesis speed for Worker fallback
+   * @param {Function} [onStart]      - Called when audio actually starts playing
+   * @param {Function} [onEnd]        - Called when audio finishes
+   */
+  async speakVocabWord(word, speed = 0.85, onStart = null, onEnd = null) {
+    if (!word) return;
+    const cleanWord = word.trim();
+    const voiceId = this.currentVoiceId;
+    const isMale = this.currentGender === 'male';
+    const effectiveSpeed = isMale ? speed * 0.94 : speed * 0.96;
+    const idbKey = `${voiceId}_${cleanWord.toLowerCase()}`;
+
+    // ── Tier 1: Instant tactile feedback ───────────────────────────
+    this.playTactileClick();
+
+    // ── Tier 2: Static pre-rendered asset (bf_isabella only) ────────
+    // For non-Isabella voices, jump straight to Tier 3 (Worker)
+    let blob = null;
+
+    if (voiceId === 'bf_isabella') {
+      blob = await this._fetchStaticAudio(cleanWord, voiceId);
+    }
+
+    // ── Check IndexedDB cache for any voice ─────────────────────────
+    if (!blob) {
+      blob = await this._idbGet(idbKey);
+    }
+
+    // ── Tier 3: Worker synthesis → IDB cache ───────────────────────
+    if (!blob) {
+      if (this.workerReady) {
+        try {
+          blob = await this._workerSynthesize(cleanWord, voiceId, effectiveSpeed);
+          if (blob) this._idbSet(idbKey, blob); // persist for next time
+        } catch (workerErr) {
+          console.warn('[SpeechEngine] Worker synthesis failed, falling back to legacy:', workerErr);
+        }
+      } else if (this.isKokoroReady && this.kokoro) {
+        // Legacy main-thread Kokoro fallback (when Worker unavailable)
+        try {
+          const result = await this.kokoro.generate(cleanWord.toLowerCase(), {
+            voice: voiceId,
+            speed: effectiveSpeed
+          });
+          blob = result.toBlob();
+          if (blob) this._idbSet(idbKey, blob);
+        } catch (e) { /* fall through to SpeechSynthesis */ }
+      }
+    }
+
+    // ── Play the resolved blob ─────────────────────────────────────
+    if (blob) {
+      this._playBlob(blob, isMale, onStart, onEnd);
+    } else {
+      // Ultimate fallback: browser native SpeechSynthesis
+      this.speakTextBrowserFallback(cleanWord, speed, onEnd, onStart);
+    }
+  }
+
+  /**
+   * Internal helper: play a Blob as audio with acoustic filter applied.
+   */
+  _playBlob(blob, isMale, onStart, onEnd) {
+    this.stopSpeakingModel();
+    this.isSpeakingModel = true;
+
+    const audioUrl = URL.createObjectURL(blob);
+    const audio = new Audio(audioUrl);
+    this.currentAudio = audio;
+    this.applyAcousticFilter(audio, isMale);
+
+    audio.oncanplaythrough = () => {
+      if (onStart) onStart();
+      if (this.onStateChange) this.onStateChange({ status: 'model_speaking' });
+    };
+
+    audio.onended = () => {
+      this.isSpeakingModel = false;
+      URL.revokeObjectURL(audioUrl);
+      this.currentAudio = null;
+      if (onEnd) onEnd();
+      if (this.onStateChange) this.onStateChange({ status: 'idle' });
+    };
+
+    audio.onerror = () => {
+      URL.revokeObjectURL(audioUrl);
+      this.currentAudio = null;
+      this.isSpeakingModel = false;
+      if (onEnd) onEnd();
+    };
+
+    audio.play().catch(() => {
+      URL.revokeObjectURL(audioUrl);
+      this.currentAudio = null;
+      this.isSpeakingModel = false;
+      if (onEnd) onEnd();
+    });
+  }
+
   /**
    * Set target essay text to be read aloud
    */
@@ -15229,6 +15611,7 @@ class SpeechEngine {
     })).filter(w => w.clean.length > 0);
 
     this.currentWordIndex = 0;
+    this.confirmedWordIndex = 0;
     this.spokenTranscripts = [];
     this.elapsedSeconds = 0;
   }
@@ -15236,35 +15619,95 @@ class SpeechEngine {
   /**
    * Align spoken stream with target tokens
    */
-  processSpokenSpeech(spokenText) {
+  /**
+   * Align spoken stream with target tokens with fast-speech lookahead and interim stability
+   * @param {string} spokenText - raw transcript text
+   * @param {boolean} isFinal - whether this chunk has been finalized by ASR
+   */
+  processSpokenSpeech(spokenText, isFinal = false) {
     const spokenWords = spokenText.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/);
     if (!spokenWords.length) return;
 
-    let targetIdx = this.currentWordIndex;
+    // Fast-speech contraction / variant normalization
+    const expandWord = (w) => {
+      const map = {
+        'cant': 'cannot',
+        'wont': 'will not',
+        'dont': 'do not',
+        'didnt': 'did not',
+        'isnt': 'is not',
+        'arent': 'are not',
+        'wasnt': 'was not',
+        'werent': 'were not',
+        'gonna': 'going to',
+        'wanna': 'want to',
+        'ive': 'i have',
+        'youve': 'you have',
+        'weve': 'we have',
+        'theyve': 'they have',
+        'im': 'i am',
+        'youre': 'you are',
+        'theyre': 'they are',
+        'heres': 'here is',
+        'theres': 'there is',
+        'whats': 'what is',
+        'couldnt': 'could not',
+        'shouldnt': 'should not',
+        'wouldnt': 'would not'
+      };
+      return map[w] || w;
+    };
 
-    // Scan backwards from recent spoken words to align
-    for (const spokenWord of spokenWords) {
+    // For interim evaluation: reset tokens from confirmedWordIndex back to pending
+    // so provisional updates don't falsely lock tokens or trigger phantom omissions
+    if (!isFinal) {
+      for (let i = this.confirmedWordIndex; i < this.targetTokens.length; i++) {
+        if (this.targetTokens[i].status !== 'pending') {
+          this.targetTokens[i].status = 'pending';
+        }
+      }
+    }
+
+    let targetIdx = this.confirmedWordIndex;
+
+    for (let sIdx = 0; sIdx < spokenWords.length; sIdx++) {
       if (targetIdx >= this.targetTokens.length) break;
 
+      const rawSpoken = spokenWords[sIdx];
+      const spokenWord = expandWord(rawSpoken);
       const targetWord = this.targetTokens[targetIdx];
       const similarity = calculateWordSimilarity(spokenWord, targetWord.clean);
 
-      if (similarity >= 0.82) {
+      const isDirectMatch = similarity >= 0.82;
+      const isPrefixMatch = (spokenWord.length >= 3 && targetWord.clean.startsWith(spokenWord)) ||
+                            (targetWord.clean.length >= 4 && spokenWord.startsWith(targetWord.clean.slice(0, 3)));
+
+      // Direct match or fast-speech word-onset prefix snap
+      if (isDirectMatch || isPrefixMatch) {
         targetWord.status = 'matched';
         targetIdx++;
-      } else if (similarity >= 0.60) {
-        targetWord.status = 'deviation'; // slight pronunciation slant / accent variance
+      } else if (similarity >= 0.55) {
+        // Minor phoneme / accent inflection deviation
+        targetWord.status = 'deviation';
         targetIdx++;
       } else {
-        // Check lookahead of up to 2 words in case user skipped or mispronounced one
+        // Lookahead of up to 5 words for fast speech (handles dropped prepositions / rapid transitions)
         let foundAhead = false;
-        for (let lookahead = 1; lookahead <= 2 && targetIdx + lookahead < this.targetTokens.length; lookahead++) {
+        const maxLookahead = Math.min(5, this.targetTokens.length - targetIdx - 1);
+
+        for (let lookahead = 1; lookahead <= maxLookahead; lookahead++) {
           const aheadWord = this.targetTokens[targetIdx + lookahead];
-          if (calculateWordSimilarity(spokenWord, aheadWord.clean) >= 0.80) {
-            // Mark skipped words as omitted
-            for (let k = 0; k < lookahead; k++) {
-              if (this.targetTokens[targetIdx + k].status === 'pending') {
-                this.targetTokens[targetIdx + k].status = 'omitted';
+          const aheadSim = calculateWordSimilarity(spokenWord, aheadWord.clean);
+          const isAheadPrefix = (spokenWord.length >= 3 && aheadWord.clean.startsWith(spokenWord));
+
+          if (aheadSim >= 0.78 || isAheadPrefix) {
+            // Found match ahead!
+            // Only mark skipped intermediate words as 'omitted' if this is a confirmed final chunk
+            if (isFinal) {
+              for (let k = 0; k < lookahead; k++) {
+                if (this.targetTokens[targetIdx + k].status === 'pending') {
+                  this.targetTokens[targetIdx + k].status = 'omitted';
+                }
               }
             }
             aheadWord.status = 'matched';
@@ -15273,11 +15716,22 @@ class SpeechEngine {
             break;
           }
         }
-        // If not found ahead and current is pending, allow it to remain or mark deviation
+
+        // If not found ahead, check if this is an accidental repetition/stumble of the immediately previous token
+        if (!foundAhead && targetIdx > 0) {
+          const prevToken = this.targetTokens[targetIdx - 1];
+          if (calculateWordSimilarity(spokenWord, prevToken.clean) >= 0.82) {
+            // User repeated previous word (natural fast-speech stumble) - ignore without advancing or penalizing
+            continue;
+          }
+        }
       }
     }
 
     this.currentWordIndex = Math.min(targetIdx, this.targetTokens.length);
+    if (isFinal) {
+      this.confirmedWordIndex = this.currentWordIndex;
+    }
 
     // Calculate real-time metrics
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
@@ -15285,8 +15739,10 @@ class SpeechEngine {
     const totalAttempted = Math.max(1, this.currentWordIndex);
     const accuracy = Math.round(((matchedCount + deviationCount * 0.7) / totalAttempted) * 100);
 
+    // Fluency Cadence (WPM) accounts for all articulated words (both matched & minor deviation)
     const minutes = Math.max(0.05, this.elapsedSeconds / 60);
-    const wpm = Math.round(matchedCount / minutes);
+    const spokenWordCount = matchedCount + deviationCount;
+    const wpm = Math.round(spokenWordCount / minutes);
 
     if (this.onWordUpdate) {
       this.onWordUpdate({
@@ -15314,10 +15770,15 @@ class SpeechEngine {
         this.initRecognition();
       }
       this.recognition.start();
+      // Start visualizer non-blockingly with micro-delay so speech recognition grabs audio driver first
       if (canvasElement) {
-        this.startAudioVisualizer(canvasElement).catch(err => {
-          console.warn("Visualizer optional mic stream error:", err);
-        });
+        setTimeout(() => {
+          if (this.isListening) {
+            this.startAudioVisualizer(canvasElement).catch(err => {
+              console.warn("Visualizer optional mic stream error:", err);
+            });
+          }
+        }, 60);
       }
     } catch (err) {
       if (err.name !== 'InvalidStateError') {
@@ -15347,7 +15808,9 @@ class SpeechEngine {
       if (this.onMetricsUpdate) {
         const minutes = Math.max(0.05, this.elapsedSeconds / 60);
         const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
-        const wpm = Math.round(matchedCount / minutes);
+        const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
+        const spokenWordCount = matchedCount + deviationCount;
+        const wpm = Math.round(spokenWordCount / minutes);
         this.onMetricsUpdate({ elapsedSeconds: this.elapsedSeconds, wpm });
       }
     }, 1000);
@@ -15371,7 +15834,8 @@ class SpeechEngine {
     const readRatio = totalWords > 0 ? ((matchedCount + deviationCount) / totalWords) : 0;
 
     const minutes = Math.max(0.1, this.elapsedSeconds / 60);
-    const wpm = Math.round(matchedCount / minutes);
+    const spokenWordCount = matchedCount + deviationCount;
+    const wpm = Math.round(spokenWordCount / minutes);
 
     // Accuracy %
     const pronunciationAccuracy = totalWords > 0 
@@ -15555,9 +16019,30 @@ class SpeechEngine {
   }
 
   /**
-   * Initialize Kokoro TTS neural model asynchronously
+   * Initialize Kokoro TTS: prefers off-thread Web Worker (Phase 1);
+   * falls back to legacy main-thread model when Worker is unavailable.
    */
   async initKokoro() {
+    // ── Primary path: Kokoro ONNX Web Worker (off main thread) ──────
+    if (typeof Worker !== 'undefined') {
+      this.initWorker();
+      // Background HTTP prefetch of voice binaries into browser HTTP cache
+      const allVoices = ['bf_isabella', 'bm_fable', 'af_heart', 'am_michael'];
+      for (const v of allVoices) {
+        this.prefetchVoice(v);
+      }
+      return; // Worker will call updateEngineStatus when ready
+    }
+
+    // ── Legacy fallback: main-thread model (file:// or no Worker support) ──
+    await this.initKokoroLegacy();
+  }
+
+  /**
+   * Legacy main-thread Kokoro initialisation (used as Worker fallback).
+   * Preserved for file:// environments and Worker-unavailable scenarios.
+   */
+  async initKokoroLegacy() {
     if (this.kokoroLoading || this.kokoro) return;
     this.kokoroLoading = true;
     this.updateEngineStatus('initializing', 'Kokoro: Loading...');
@@ -15575,7 +16060,7 @@ class SpeechEngine {
             KokoroTTS = mod.KokoroTTS;
             window.KokoroTTS = KokoroTTS;
           } catch (e2) {
-            console.warn("Could not import KokoroTTS module from CDNs:", e2);
+            console.warn('Could not import KokoroTTS module from CDNs:', e2);
           }
         }
       }
@@ -15593,9 +16078,8 @@ class SpeechEngine {
           isNeural ? 'ready' : 'fallback',
           isNeural ? 'Kokoro Neural' : 'Fast Native (0ms)'
         );
-        console.log('Kokoro TTS initialized successfully with voices: UK (Isabella, Fable) & USA (Heart, Michael).');
+        console.log('Kokoro TTS (legacy main-thread) initialized: UK (Isabella, Fable) & USA (Heart, Michael).');
 
-        // Background HTTP prefetch of voice binaries (0% CPU, sits in browser HTTP cache)
         const allVoices = ['bf_isabella', 'bm_fable', 'af_heart', 'am_michael'];
         for (const v of allVoices) {
           this.prefetchVoice(v);
@@ -15604,7 +16088,7 @@ class SpeechEngine {
         throw new Error('KokoroTTS module could not be retrieved.');
       }
     } catch (err) {
-      console.warn('Kokoro neural model unavailable (file:// protocol or offline). Falling back to browser speech synthesis:', err);
+      console.warn('Kokoro neural model unavailable. Falling back to browser speech synthesis:', err);
       this.isKokoroReady = false;
       this.kokoro = null;
       this.updateEngineStatus('fallback', 'Native Speech');
@@ -15847,7 +16331,16 @@ class SpeechEngine {
       if (this.mediaStream && this.mediaStream.active) {
         this.mediaStream.getAudioTracks().forEach(track => { track.enabled = true; });
       } else {
-        this.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        this.mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false, // Don't run heavy software filter on visualizer tap
+            noiseSuppression: false, // Don't gate or buffer audio
+            autoGainControl: false,  // Don't fight speech recognition AGC
+            channelCount: 1,
+            latency: 0
+          },
+          video: false
+        });
         const source = this.audioContext.createMediaStreamSource(this.mediaStream);
         this.analyser = this.audioContext.createAnalyser();
         this.analyser.fftSize = 256;
@@ -15926,10 +16419,11 @@ function calculateWordSimilarity(s1, s2) {
   if (s1 === s2) return 1.0;
   if (!s1 || !s2) return 0.0;
 
-  // Suffix strip matching (e.g., "mitigating" vs "mitigate", "paradigms" vs "paradigm")
+  // Suffix strip & morphological matching (e.g., "mitigating" vs "mitigate", "paradigms" vs "paradigm")
   if (s1.startsWith(s2) || s2.startsWith(s1)) {
     const diff = Math.abs(s1.length - s2.length);
     if (diff <= 3) return 0.88;
+    if (diff <= 5 && Math.min(s1.length, s2.length) >= 4) return 0.82;
   }
 
   const distance = levenshteinDistance(s1, s2);
@@ -16000,7 +16494,6 @@ class FluentEdgeApp {
     this.setTargetLevel(this.targetLevel, true);
     this.setTopicDifficulty(this.topicDifficulty, false);
     this.loadTopic(this.currentTopic);
-    this.renderHistory();
     this.updateEducationalRequirementsCard();
     this.setStage(1);
   }
@@ -16008,12 +16501,10 @@ class FluentEdgeApp {
   cacheDomElements() {
     this.dom = {
       // Header
-      historyDrawerBtn: document.getElementById('historyDrawerBtn'),
-      historyDrawer: document.getElementById('historyDrawer'),
-      closeHistoryBtn: document.getElementById('closeHistoryBtn'),
-      clearHistoryBtn: document.getElementById('clearHistoryBtn'),
-      historyList: document.getElementById('historyList'),
-      brandCrest: document.getElementById('brandCrest'),
+      historyDrawer: null,
+      closeHistoryBtn: null,
+      clearHistoryBtn: null,
+      historyList: null,
       modeC1Btn: document.getElementById('modeC1Btn'),
       modeC2Btn: document.getElementById('modeC2Btn'),
 
@@ -16021,9 +16512,6 @@ class FluentEdgeApp {
       headerVoiceBar: document.getElementById('headerVoiceBar'),
       voiceFlagCards: document.querySelectorAll('.voice-flag-card'),
       voiceGenderBtns: document.querySelectorAll('.voice-gender-btn'),
-      engineStatusDot: document.getElementById('engineStatusDot'),
-      engineStatusText: document.getElementById('engineStatusText'),
-      previewVoiceBtn: document.getElementById('previewVoiceBtn'),
 
       // Stepper
       stepIndicator1: document.getElementById('stepIndicator1'),
@@ -16131,12 +16619,15 @@ class FluentEdgeApp {
       startSpeakingBtn: document.getElementById('startSpeakingBtn'),
       stopSpeakingBtn: document.getElementById('stopSpeakingBtn'),
       playModelAudioBtn: document.getElementById('playModelAudioBtn'),
+      playModelAudioBtnText: document.getElementById('playModelAudioBtnText'),
       stopModelAudioBtn: document.getElementById('stopModelAudioBtn'),
       visualizerCanvas: document.getElementById('visualizerCanvas'),
       liveSpeakingWpm: document.getElementById('liveSpeakingWpm'),
       liveSpeakingAcc: document.getElementById('liveSpeakingAcc'),
       liveSpeakingTime: document.getElementById('liveSpeakingTime'),
       speakingReportPanel: document.getElementById('speakingReportPanel'),
+      speakingVoiceTip: document.getElementById('speakingVoiceTip'),
+      speakingVoiceTipName: document.getElementById('speakingVoiceTipName'),
 
       // Toast
       toastContainer: document.getElementById('toastContainer'),
@@ -16196,23 +16687,7 @@ class FluentEdgeApp {
       });
     }
 
-    // Voice Preview Button
-    if (this.dom.previewVoiceBtn) {
-      this.dom.previewVoiceBtn.addEventListener('click', () => {
-        this.previewCurrentVoice();
-      });
-    }
 
-    // Voice Engine Mode Toggle (Neural vs Fast Native)
-    const voiceEngineTag = document.getElementById('voiceEngineTag');
-    if (voiceEngineTag) {
-      voiceEngineTag.addEventListener('click', (e) => {
-        if (e.target.closest('#previewVoiceBtn')) return;
-        const newMode = this.speechEngine.toggleEngineMode();
-        const modeLabel = newMode === 'neural' ? 'Kokoro Neural' : 'Fast Native (0ms)';
-        this.showToast(`Speech Engine: ${modeLabel}`, 'info');
-      });
-    }
 
     // Topic events (Draw New Tree Topic)
     if (this.dom.rerollTopicBtn) {
@@ -16290,10 +16765,6 @@ class FluentEdgeApp {
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
     this.dom.stopModelAudioBtn.addEventListener('click', () => this.stopModelAudio());
 
-    // History drawer events
-    this.dom.historyDrawerBtn.addEventListener('click', () => this.openHistoryDrawer());
-    this.dom.closeHistoryBtn.addEventListener('click', () => this.closeHistoryDrawer());
-    this.dom.clearHistoryBtn.addEventListener('click', () => this.clearHistory());
 
     // Guard against accidental window/tab close or refresh when draft exists
     window.addEventListener('beforeunload', (e) => {
@@ -16487,14 +16958,7 @@ class FluentEdgeApp {
     this.speechEngine.onError = (message) => {
     };
 
-    this.speechEngine.onEngineStatusChange = ({ state, message }) => {
-      if (this.dom.engineStatusText) {
-        this.dom.engineStatusText.textContent = message;
-      }
-      if (this.dom.engineStatusDot) {
-        this.dom.engineStatusDot.className = `engine-status-dot status-${state}`;
-      }
-    };
+
 
     this.speechEngine.onVoiceChange = ({ voiceId }) => {
       this.updateVoiceUI(voiceId);
@@ -16502,9 +16966,9 @@ class FluentEdgeApp {
   }
 
   initVoiceSelection() {
-    let savedVoice = 'bf_isabella';
+    let savedVoice = 'af_heart';
     try {
-      savedVoice = localStorage.getItem('fluentedge_selected_voice') || 'bf_isabella';
+      savedVoice = localStorage.getItem('fluentedge_selected_voice') || 'af_heart';
       if (savedVoice === 'bf_emma') savedVoice = 'bf_isabella';
       if (savedVoice === 'af_sarah' || savedVoice === 'af_bella') savedVoice = 'af_heart';
       if (savedVoice === 'bm_george') savedVoice = 'bm_fable';
@@ -16529,12 +16993,12 @@ class FluentEdgeApp {
 
   updateVoiceUI(voiceId) {
     if (!this.dom.voiceGenderBtns) return;
-    let selectedAccent = 'uk';
+    let selectedAccent = 'us';
     this.dom.voiceGenderBtns.forEach(btn => {
       const isActive = btn.getAttribute('data-voice') === voiceId;
       btn.classList.toggle('active', isActive);
       if (isActive) {
-        selectedAccent = btn.getAttribute('data-accent') || 'uk';
+        selectedAccent = btn.getAttribute('data-accent') || 'us';
       }
     });
 
@@ -16544,24 +17008,45 @@ class FluentEdgeApp {
         card.classList.toggle('active', isCardActive);
       });
     }
-  }
 
-  previewCurrentVoice() {
-    const isUK = this.speechEngine.currentAccent === 'uk';
-    const previewText = isUK 
-      ? "Eloquent cadence and phonological precision in British English." 
-      : "Advanced rhetoric and articulation in American English.";
-    
-    if (this.dom.previewVoiceBtn) {
-      this.dom.previewVoiceBtn.style.opacity = '0.6';
-      this.speechEngine.speakText(previewText, 0.95, () => {
-        if (this.dom.previewVoiceBtn) this.dom.previewVoiceBtn.style.opacity = '1';
-      });
-      setTimeout(() => {
-        if (this.dom.previewVoiceBtn) this.dom.previewVoiceBtn.style.opacity = '1';
-      }, 3500);
+    // Synchronize "Listen to Model" button label with selected voice
+    const voiceLabels = {
+      af_heart: 'Listen to Model (USA Female - Heart)',
+      am_michael: 'Listen to Model (USA Male - Michael)',
+      bf_isabella: 'Listen to Model (UK Female - Isabella)',
+      bm_fable: 'Listen to Model (UK Male - Fable)'
+    };
+    const label = voiceLabels[voiceId] || 'Listen to Model Audio';
+
+    if (this.dom.playModelAudioBtnText) {
+      this.dom.playModelAudioBtnText.textContent = label;
+    } else if (this.dom.playModelAudioBtn) {
+      const svg = this.dom.playModelAudioBtn.querySelector('svg');
+      this.dom.playModelAudioBtn.innerHTML = '';
+      if (svg) this.dom.playModelAudioBtn.appendChild(svg);
+      const span = document.createElement('span');
+      span.id = 'playModelAudioBtnText';
+      span.textContent = label;
+      this.dom.playModelAudioBtn.appendChild(span);
+      this.dom.playModelAudioBtnText = span;
+    }
+
+    // Synchronize teleprompter legend tip with selected voice
+    const tipVoiceLabels = {
+      af_heart: 'USA Female (Heart)',
+      am_michael: 'USA Male (Michael)',
+      bf_isabella: 'UK Female (Isabella)',
+      bm_fable: 'UK Male (Fable)'
+    };
+    const tipVoice = tipVoiceLabels[voiceId] || 'selected voice';
+    if (this.dom.speakingVoiceTipName) {
+      this.dom.speakingVoiceTipName.textContent = tipVoice;
+    } else if (this.dom.speakingVoiceTip) {
+      this.dom.speakingVoiceTip.textContent = `Tip: Click any word to hear its ${tipVoice} pronunciation!`;
     }
   }
+
+
 
   setTargetLevel(level, force = false) {
     if (!force && level === this.targetLevel) {
@@ -16698,12 +17183,6 @@ class FluentEdgeApp {
     }
 
     this.currentStage = stageNum;
-
-    // Toggle Stage 1 Active class on body (hides history drawer on Stage 1)
-    document.body.classList.toggle('stage-1-active', stageNum === 1);
-    if (this.dom.historyDrawerBtn) {
-      this.dom.historyDrawerBtn.style.display = stageNum === 1 ? 'none' : 'inline-flex';
-    }
 
     // Toggle Stage views
     if (this.dom.stage1Panel) {
@@ -16910,11 +17389,13 @@ class FluentEdgeApp {
           e.stopPropagation();
           const word = btn.getAttribute('data-speak');
           btn.classList.add('loading');
-          this.speechEngine.speakText(
+          // Phase 1: Use hybrid speakVocabWord() pipeline
+          // (tactile click → static asset → Worker synthesis → IDB cache)
+          this.speechEngine.speakVocabWord(
             word,
             0.85,
-            () => { btn.classList.remove('loading', 'playing'); },
-            () => { btn.classList.remove('loading'); btn.classList.add('playing'); }
+            () => { btn.classList.remove('loading'); btn.classList.add('playing'); },
+            () => { btn.classList.remove('loading', 'playing'); }
           );
         });
       });
@@ -16945,11 +17426,12 @@ class FluentEdgeApp {
           e.stopPropagation();
           const word = btn.getAttribute('data-speak');
           btn.classList.add('loading');
-          this.speechEngine.speakText(
+          // Phase 1: Use hybrid speakVocabWord() pipeline
+          this.speechEngine.speakVocabWord(
             word,
             0.85,
-            () => { btn.classList.remove('loading', 'playing'); },
-            () => { btn.classList.remove('loading'); btn.classList.add('playing'); }
+            () => { btn.classList.remove('loading'); btn.classList.add('playing'); },
+            () => { btn.classList.remove('loading', 'playing'); }
           );
         });
       });
@@ -17663,19 +18145,6 @@ class FluentEdgeApp {
     // Open Modal
     this.dom.evalModalBackdrop.classList.add('open');
 
-    // Save to history
-    this.saveSessionToHistory({
-      type: 'writing',
-      topicId: this.currentTopic.id,
-      targetLevel: this.targetLevel,
-      topicTitle: this.currentTopic.title,
-      text: text,
-      score: evalResult.rawTotal,
-      percentage: evalResult.percentage,
-      band: evalResult.cefr.band,
-      meetsThreshold: evalResult.meetsThreshold,
-      date: new Date().toISOString()
-    });
   }
 
   closeEvaluationModal() {
@@ -17718,8 +18187,11 @@ class FluentEdgeApp {
       </span>
     `).join(' ');
 
+    // Cache spans to avoid expensive querySelectorAll tree traversals during fast live speech
+    this._teleprompterSpans = Array.from(this.dom.teleprompterText.querySelectorAll('.teleprompter-word'));
+
     // Add click to speak word
-    this.dom.teleprompterText.querySelectorAll('.teleprompter-word').forEach(el => {
+    this._teleprompterSpans.forEach(el => {
       el.addEventListener('click', () => {
         const wordText = el.textContent.trim();
         this.speechEngine.speakText(wordText, 0.85);
@@ -17728,12 +18200,17 @@ class FluentEdgeApp {
   }
 
   updateTeleprompterDisplay(tokens) {
-    const spans = this.dom.teleprompterText.querySelectorAll('.teleprompter-word');
-    tokens.forEach((token, i) => {
-      if (spans[i]) {
-        spans[i].className = `teleprompter-word ${token.status}`;
+    if (!this._teleprompterSpans || this._teleprompterSpans.length !== tokens.length) {
+      this._teleprompterSpans = Array.from(this.dom.teleprompterText.querySelectorAll('.teleprompter-word'));
+    }
+    const spans = this._teleprompterSpans;
+    const len = Math.min(tokens.length, spans.length);
+    for (let i = 0; i < len; i++) {
+      const targetClass = `teleprompter-word ${tokens[i].status}`;
+      if (spans[i].className !== targetClass) {
+        spans[i].className = targetClass;
       }
-    });
+    }
   }
 
   returnToWriting() {
@@ -17750,17 +18227,6 @@ class FluentEdgeApp {
     this.speechEngine.stopListening();
     const report = this.speechEngine.getFinalSpeakingAssessment();
     this.renderSpeakingReport(report);
-
-    // Save to history
-    this.saveSessionToHistory({
-      type: 'speaking',
-      topicTitle: this.currentTopic.title,
-      accuracy: report.pronunciationAccuracy,
-      wpm: report.wpm,
-      band: report.speakingBand,
-      duration: report.elapsedSeconds,
-      date: new Date().toISOString()
-    });
   }
 
   renderSpeakingReport(report) {
@@ -17848,66 +18314,6 @@ class FluentEdgeApp {
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  }
-
-  // ==========================================
-  // HISTORY & LOCALSTORAGE
-  // ==========================================
-
-  saveSessionToHistory(entry) {
-    try {
-      const history = JSON.parse(localStorage.getItem('fluentedge_history') || '[]');
-      history.unshift(entry);
-      localStorage.setItem('fluentedge_history', JSON.stringify(history.slice(0, 30)));
-      this.renderHistory();
-    } catch (e) {
-      console.warn("Could not save to localStorage:", e);
-    }
-  }
-
-  renderHistory() {
-    try {
-      const history = JSON.parse(localStorage.getItem('fluentedge_history') || '[]');
-      if (history.length === 0) {
-        this.dom.historyList.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px; font-size: 13px;">No past sessions yet. Complete an essay or speaking test to track your C1 progression.</div>`;
-        return;
-      }
-
-      this.dom.historyList.innerHTML = history.map(item => `
-        <div class="history-item">
-          <div class="history-item-top">
-            <span>${item.type === 'writing' ? (item.targetLevel ? `${item.targetLevel} Writing` : 'Writing Task') : 'Speaking Test'}</span>
-            <span>${new Date(item.date).toLocaleDateString()}</span>
-          </div>
-          <div class="history-item-title">${item.topicTitle}</div>
-          <div class="history-item-scores">
-            ${item.type === 'writing' 
-              ? `<span>Score: ${item.score}/20 (${item.percentage}%)</span> • <span>${item.band}</span>`
-              : `<span>Accuracy: ${item.accuracy}%</span> • <span>${item.wpm} WPM</span>`
-            }
-          </div>
-        </div>
-      `).join('');
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  openHistoryDrawer() {
-    this.dom.historyDrawer.classList.add('open');
-  }
-
-  closeHistoryDrawer() {
-    this.dom.historyDrawer.classList.remove('open');
-  }
-
-  clearHistory() {
-    if (confirm("Clear your FluentEdge training logs?")) {
-      localStorage.removeItem('fluentedge_history');
-      localStorage.removeItem('fluentedge_topic_progress');
-      this.renderHistory();
-      this.showToast("History cleared.", "info");
-    }
   }
 
   // ==========================================

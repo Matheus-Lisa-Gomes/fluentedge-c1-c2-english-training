@@ -6,6 +6,13 @@ $evaluatorContent = [System.IO.File]::ReadAllText("$PSScriptRoot/js/modules/eval
 $speechContent = [System.IO.File]::ReadAllText("$PSScriptRoot/js/modules/speech.js", [System.Text.Encoding]::UTF8)
 $appContent = [System.IO.File]::ReadAllText("$PSScriptRoot/js/app.js", [System.Text.Encoding]::UTF8)
 
+# Phase 1: The Kokoro Web Worker (js/workers/kokoro-worker.js) is kept as a
+# SEPARATE file and is NOT inlined into bundle.js. Web Workers must be loaded
+# from a real URL and cannot be eval'd from a blob in all browsers.
+# The worker file is served directly by the HTTP server at ./js/workers/kokoro-worker.js
+# When running from file://, the Worker will fail gracefully and fall back to
+# the legacy main-thread Kokoro path already present in bundle.js.
+
 # 1. Vocabulary Lexicon
 $vocabClean = $vocabContent -replace '(?m)^\s*export\s+const\s+', 'const '
 $vocabClean = $vocabClean -replace '(?m)^\s*export\s+function\s+', 'function '

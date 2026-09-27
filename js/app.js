@@ -39,7 +39,6 @@ class FluentEdgeApp {
     this.setTargetLevel(this.targetLevel, true);
     this.setTopicDifficulty(this.topicDifficulty, false);
     this.loadTopic(this.currentTopic);
-    this.renderHistory();
     this.updateEducationalRequirementsCard();
     this.setStage(1);
   }
@@ -47,12 +46,10 @@ class FluentEdgeApp {
   cacheDomElements() {
     this.dom = {
       // Header
-      historyDrawerBtn: document.getElementById('historyDrawerBtn'),
-      historyDrawer: document.getElementById('historyDrawer'),
-      closeHistoryBtn: document.getElementById('closeHistoryBtn'),
-      clearHistoryBtn: document.getElementById('clearHistoryBtn'),
-      historyList: document.getElementById('historyList'),
-      brandCrest: document.getElementById('brandCrest'),
+      historyDrawer: null,
+      closeHistoryBtn: null,
+      clearHistoryBtn: null,
+      historyList: null,
       modeC1Btn: document.getElementById('modeC1Btn'),
       modeC2Btn: document.getElementById('modeC2Btn'),
 
@@ -60,9 +57,6 @@ class FluentEdgeApp {
       headerVoiceBar: document.getElementById('headerVoiceBar'),
       voiceFlagCards: document.querySelectorAll('.voice-flag-card'),
       voiceGenderBtns: document.querySelectorAll('.voice-gender-btn'),
-      engineStatusDot: document.getElementById('engineStatusDot'),
-      engineStatusText: document.getElementById('engineStatusText'),
-      previewVoiceBtn: document.getElementById('previewVoiceBtn'),
 
       // Stepper
       stepIndicator1: document.getElementById('stepIndicator1'),
@@ -170,12 +164,15 @@ class FluentEdgeApp {
       startSpeakingBtn: document.getElementById('startSpeakingBtn'),
       stopSpeakingBtn: document.getElementById('stopSpeakingBtn'),
       playModelAudioBtn: document.getElementById('playModelAudioBtn'),
+      playModelAudioBtnText: document.getElementById('playModelAudioBtnText'),
       stopModelAudioBtn: document.getElementById('stopModelAudioBtn'),
       visualizerCanvas: document.getElementById('visualizerCanvas'),
       liveSpeakingWpm: document.getElementById('liveSpeakingWpm'),
       liveSpeakingAcc: document.getElementById('liveSpeakingAcc'),
       liveSpeakingTime: document.getElementById('liveSpeakingTime'),
       speakingReportPanel: document.getElementById('speakingReportPanel'),
+      speakingVoiceTip: document.getElementById('speakingVoiceTip'),
+      speakingVoiceTipName: document.getElementById('speakingVoiceTipName'),
 
       // Toast
       toastContainer: document.getElementById('toastContainer'),
@@ -235,23 +232,7 @@ class FluentEdgeApp {
       });
     }
 
-    // Voice Preview Button
-    if (this.dom.previewVoiceBtn) {
-      this.dom.previewVoiceBtn.addEventListener('click', () => {
-        this.previewCurrentVoice();
-      });
-    }
 
-    // Voice Engine Mode Toggle (Neural vs Fast Native)
-    const voiceEngineTag = document.getElementById('voiceEngineTag');
-    if (voiceEngineTag) {
-      voiceEngineTag.addEventListener('click', (e) => {
-        if (e.target.closest('#previewVoiceBtn')) return;
-        const newMode = this.speechEngine.toggleEngineMode();
-        const modeLabel = newMode === 'neural' ? 'Kokoro Neural' : 'Fast Native (0ms)';
-        this.showToast(`Speech Engine: ${modeLabel}`, 'info');
-      });
-    }
 
     // Topic events (Draw New Tree Topic)
     if (this.dom.rerollTopicBtn) {
@@ -329,10 +310,6 @@ class FluentEdgeApp {
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
     this.dom.stopModelAudioBtn.addEventListener('click', () => this.stopModelAudio());
 
-    // History drawer events
-    this.dom.historyDrawerBtn.addEventListener('click', () => this.openHistoryDrawer());
-    this.dom.closeHistoryBtn.addEventListener('click', () => this.closeHistoryDrawer());
-    this.dom.clearHistoryBtn.addEventListener('click', () => this.clearHistory());
 
     // Guard against accidental window/tab close or refresh when draft exists
     window.addEventListener('beforeunload', (e) => {
@@ -526,14 +503,7 @@ class FluentEdgeApp {
     this.speechEngine.onError = (message) => {
     };
 
-    this.speechEngine.onEngineStatusChange = ({ state, message }) => {
-      if (this.dom.engineStatusText) {
-        this.dom.engineStatusText.textContent = message;
-      }
-      if (this.dom.engineStatusDot) {
-        this.dom.engineStatusDot.className = `engine-status-dot status-${state}`;
-      }
-    };
+
 
     this.speechEngine.onVoiceChange = ({ voiceId }) => {
       this.updateVoiceUI(voiceId);
@@ -541,9 +511,9 @@ class FluentEdgeApp {
   }
 
   initVoiceSelection() {
-    let savedVoice = 'bf_isabella';
+    let savedVoice = 'af_heart';
     try {
-      savedVoice = localStorage.getItem('fluentedge_selected_voice') || 'bf_isabella';
+      savedVoice = localStorage.getItem('fluentedge_selected_voice') || 'af_heart';
       if (savedVoice === 'bf_emma') savedVoice = 'bf_isabella';
       if (savedVoice === 'af_sarah' || savedVoice === 'af_bella') savedVoice = 'af_heart';
       if (savedVoice === 'bm_george') savedVoice = 'bm_fable';
@@ -568,12 +538,12 @@ class FluentEdgeApp {
 
   updateVoiceUI(voiceId) {
     if (!this.dom.voiceGenderBtns) return;
-    let selectedAccent = 'uk';
+    let selectedAccent = 'us';
     this.dom.voiceGenderBtns.forEach(btn => {
       const isActive = btn.getAttribute('data-voice') === voiceId;
       btn.classList.toggle('active', isActive);
       if (isActive) {
-        selectedAccent = btn.getAttribute('data-accent') || 'uk';
+        selectedAccent = btn.getAttribute('data-accent') || 'us';
       }
     });
 
@@ -583,24 +553,45 @@ class FluentEdgeApp {
         card.classList.toggle('active', isCardActive);
       });
     }
-  }
 
-  previewCurrentVoice() {
-    const isUK = this.speechEngine.currentAccent === 'uk';
-    const previewText = isUK 
-      ? "Eloquent cadence and phonological precision in British English." 
-      : "Advanced rhetoric and articulation in American English.";
-    
-    if (this.dom.previewVoiceBtn) {
-      this.dom.previewVoiceBtn.style.opacity = '0.6';
-      this.speechEngine.speakText(previewText, 0.95, () => {
-        if (this.dom.previewVoiceBtn) this.dom.previewVoiceBtn.style.opacity = '1';
-      });
-      setTimeout(() => {
-        if (this.dom.previewVoiceBtn) this.dom.previewVoiceBtn.style.opacity = '1';
-      }, 3500);
+    // Synchronize "Listen to Model" button label with selected voice
+    const voiceLabels = {
+      af_heart: 'Listen to Model (USA Female - Heart)',
+      am_michael: 'Listen to Model (USA Male - Michael)',
+      bf_isabella: 'Listen to Model (UK Female - Isabella)',
+      bm_fable: 'Listen to Model (UK Male - Fable)'
+    };
+    const label = voiceLabels[voiceId] || 'Listen to Model Audio';
+
+    if (this.dom.playModelAudioBtnText) {
+      this.dom.playModelAudioBtnText.textContent = label;
+    } else if (this.dom.playModelAudioBtn) {
+      const svg = this.dom.playModelAudioBtn.querySelector('svg');
+      this.dom.playModelAudioBtn.innerHTML = '';
+      if (svg) this.dom.playModelAudioBtn.appendChild(svg);
+      const span = document.createElement('span');
+      span.id = 'playModelAudioBtnText';
+      span.textContent = label;
+      this.dom.playModelAudioBtn.appendChild(span);
+      this.dom.playModelAudioBtnText = span;
+    }
+
+    // Synchronize teleprompter legend tip with selected voice
+    const tipVoiceLabels = {
+      af_heart: 'USA Female (Heart)',
+      am_michael: 'USA Male (Michael)',
+      bf_isabella: 'UK Female (Isabella)',
+      bm_fable: 'UK Male (Fable)'
+    };
+    const tipVoice = tipVoiceLabels[voiceId] || 'selected voice';
+    if (this.dom.speakingVoiceTipName) {
+      this.dom.speakingVoiceTipName.textContent = tipVoice;
+    } else if (this.dom.speakingVoiceTip) {
+      this.dom.speakingVoiceTip.textContent = `Tip: Click any word to hear its ${tipVoice} pronunciation!`;
     }
   }
+
+
 
   setTargetLevel(level, force = false) {
     if (!force && level === this.targetLevel) {
@@ -737,12 +728,6 @@ class FluentEdgeApp {
     }
 
     this.currentStage = stageNum;
-
-    // Toggle Stage 1 Active class on body (hides history drawer on Stage 1)
-    document.body.classList.toggle('stage-1-active', stageNum === 1);
-    if (this.dom.historyDrawerBtn) {
-      this.dom.historyDrawerBtn.style.display = stageNum === 1 ? 'none' : 'inline-flex';
-    }
 
     // Toggle Stage views
     if (this.dom.stage1Panel) {
@@ -949,11 +934,13 @@ class FluentEdgeApp {
           e.stopPropagation();
           const word = btn.getAttribute('data-speak');
           btn.classList.add('loading');
-          this.speechEngine.speakText(
+          // Phase 1: Use hybrid speakVocabWord() pipeline
+          // (tactile click → static asset → Worker synthesis → IDB cache)
+          this.speechEngine.speakVocabWord(
             word,
             0.85,
-            () => { btn.classList.remove('loading', 'playing'); },
-            () => { btn.classList.remove('loading'); btn.classList.add('playing'); }
+            () => { btn.classList.remove('loading'); btn.classList.add('playing'); },
+            () => { btn.classList.remove('loading', 'playing'); }
           );
         });
       });
@@ -984,11 +971,12 @@ class FluentEdgeApp {
           e.stopPropagation();
           const word = btn.getAttribute('data-speak');
           btn.classList.add('loading');
-          this.speechEngine.speakText(
+          // Phase 1: Use hybrid speakVocabWord() pipeline
+          this.speechEngine.speakVocabWord(
             word,
             0.85,
-            () => { btn.classList.remove('loading', 'playing'); },
-            () => { btn.classList.remove('loading'); btn.classList.add('playing'); }
+            () => { btn.classList.remove('loading'); btn.classList.add('playing'); },
+            () => { btn.classList.remove('loading', 'playing'); }
           );
         });
       });
@@ -1702,19 +1690,6 @@ class FluentEdgeApp {
     // Open Modal
     this.dom.evalModalBackdrop.classList.add('open');
 
-    // Save to history
-    this.saveSessionToHistory({
-      type: 'writing',
-      topicId: this.currentTopic.id,
-      targetLevel: this.targetLevel,
-      topicTitle: this.currentTopic.title,
-      text: text,
-      score: evalResult.rawTotal,
-      percentage: evalResult.percentage,
-      band: evalResult.cefr.band,
-      meetsThreshold: evalResult.meetsThreshold,
-      date: new Date().toISOString()
-    });
   }
 
   closeEvaluationModal() {
@@ -1757,8 +1732,11 @@ class FluentEdgeApp {
       </span>
     `).join(' ');
 
+    // Cache spans to avoid expensive querySelectorAll tree traversals during fast live speech
+    this._teleprompterSpans = Array.from(this.dom.teleprompterText.querySelectorAll('.teleprompter-word'));
+
     // Add click to speak word
-    this.dom.teleprompterText.querySelectorAll('.teleprompter-word').forEach(el => {
+    this._teleprompterSpans.forEach(el => {
       el.addEventListener('click', () => {
         const wordText = el.textContent.trim();
         this.speechEngine.speakText(wordText, 0.85);
@@ -1767,12 +1745,17 @@ class FluentEdgeApp {
   }
 
   updateTeleprompterDisplay(tokens) {
-    const spans = this.dom.teleprompterText.querySelectorAll('.teleprompter-word');
-    tokens.forEach((token, i) => {
-      if (spans[i]) {
-        spans[i].className = `teleprompter-word ${token.status}`;
+    if (!this._teleprompterSpans || this._teleprompterSpans.length !== tokens.length) {
+      this._teleprompterSpans = Array.from(this.dom.teleprompterText.querySelectorAll('.teleprompter-word'));
+    }
+    const spans = this._teleprompterSpans;
+    const len = Math.min(tokens.length, spans.length);
+    for (let i = 0; i < len; i++) {
+      const targetClass = `teleprompter-word ${tokens[i].status}`;
+      if (spans[i].className !== targetClass) {
+        spans[i].className = targetClass;
       }
-    });
+    }
   }
 
   returnToWriting() {
@@ -1789,17 +1772,6 @@ class FluentEdgeApp {
     this.speechEngine.stopListening();
     const report = this.speechEngine.getFinalSpeakingAssessment();
     this.renderSpeakingReport(report);
-
-    // Save to history
-    this.saveSessionToHistory({
-      type: 'speaking',
-      topicTitle: this.currentTopic.title,
-      accuracy: report.pronunciationAccuracy,
-      wpm: report.wpm,
-      band: report.speakingBand,
-      duration: report.elapsedSeconds,
-      date: new Date().toISOString()
-    });
   }
 
   renderSpeakingReport(report) {
@@ -1887,66 +1859,6 @@ class FluentEdgeApp {
     const mins = Math.floor(totalSeconds / 60);
     const secs = totalSeconds % 60;
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  }
-
-  // ==========================================
-  // HISTORY & LOCALSTORAGE
-  // ==========================================
-
-  saveSessionToHistory(entry) {
-    try {
-      const history = JSON.parse(localStorage.getItem('fluentedge_history') || '[]');
-      history.unshift(entry);
-      localStorage.setItem('fluentedge_history', JSON.stringify(history.slice(0, 30)));
-      this.renderHistory();
-    } catch (e) {
-      console.warn("Could not save to localStorage:", e);
-    }
-  }
-
-  renderHistory() {
-    try {
-      const history = JSON.parse(localStorage.getItem('fluentedge_history') || '[]');
-      if (history.length === 0) {
-        this.dom.historyList.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 24px; font-size: 13px;">No past sessions yet. Complete an essay or speaking test to track your C1 progression.</div>`;
-        return;
-      }
-
-      this.dom.historyList.innerHTML = history.map(item => `
-        <div class="history-item">
-          <div class="history-item-top">
-            <span>${item.type === 'writing' ? (item.targetLevel ? `${item.targetLevel} Writing` : 'Writing Task') : 'Speaking Test'}</span>
-            <span>${new Date(item.date).toLocaleDateString()}</span>
-          </div>
-          <div class="history-item-title">${item.topicTitle}</div>
-          <div class="history-item-scores">
-            ${item.type === 'writing' 
-              ? `<span>Score: ${item.score}/20 (${item.percentage}%)</span> • <span>${item.band}</span>`
-              : `<span>Accuracy: ${item.accuracy}%</span> • <span>${item.wpm} WPM</span>`
-            }
-          </div>
-        </div>
-      `).join('');
-    } catch (e) {
-      // ignore
-    }
-  }
-
-  openHistoryDrawer() {
-    this.dom.historyDrawer.classList.add('open');
-  }
-
-  closeHistoryDrawer() {
-    this.dom.historyDrawer.classList.remove('open');
-  }
-
-  clearHistory() {
-    if (confirm("Clear your FluentEdge training logs?")) {
-      localStorage.removeItem('fluentedge_history');
-      localStorage.removeItem('fluentedge_topic_progress');
-      this.renderHistory();
-      this.showToast("History cleared.", "info");
-    }
   }
 
   // ==========================================

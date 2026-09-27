@@ -54,12 +54,7 @@
           </div>
         </div>
 
-        <button id="historyDrawerBtn" class="btn btn-secondary" style="display: none;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 8v4l3 3m6-3a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"></path>
-          </svg>
-          History
-        </button>
+
       </div>
     </header>
 
@@ -75,32 +70,14 @@
       </div>
 
       <div class="voice-flags-group">
-        <!-- 🇬🇧 UK English Flag Button Group -->
-        <div class="voice-flag-card active" id="flagCardUK" data-accent="uk">
-          <div class="flag-badge-btn" title="British English (Received Pronunciation / Oxford Cadence)">
-            <span class="flag-emblem" aria-hidden="true">🇬🇧</span>
-            <span class="flag-title">UK English</span>
-          </div>
-          <div class="voice-gender-split" role="group" aria-label="UK English Voice Selection">
-            <button type="button" class="voice-gender-btn active" id="voiceBtnUkFemale" data-voice="bf_isabella" data-accent="uk" data-gender="female" aria-label="UK Female Voice (Isabella - Mellow)" title="British English - Female (Isabella: Feminine & Mellow)">
-              <span class="gender-sym">♀</span>
-              <span class="gender-name">Female</span>
-            </button>
-            <button type="button" class="voice-gender-btn" id="voiceBtnUkMale" data-voice="bm_fable" data-accent="uk" data-gender="male" aria-label="UK Male Voice (Fable - Calm & Deep)" title="British English - Male (Fable: Calm & Deep)">
-              <span class="gender-sym">♂</span>
-              <span class="gender-name">Male</span>
-            </button>
-          </div>
-        </div>
-
         <!-- 🇺🇸 USA English Flag Button Group -->
-        <div class="voice-flag-card" id="flagCardUS" data-accent="us">
+        <div class="voice-flag-card active" id="flagCardUS" data-accent="us">
           <div class="flag-badge-btn" title="American English (General American Cadence)">
             <span class="flag-emblem" aria-hidden="true">🇺🇸</span>
             <span class="flag-title">USA English</span>
           </div>
           <div class="voice-gender-split" role="group" aria-label="USA English Voice Selection">
-            <button type="button" class="voice-gender-btn" id="voiceBtnUsFemale" data-voice="af_heart" data-accent="us" data-gender="female" aria-label="USA Female Voice (Heart - Mellow)" title="American English - Female (Heart: Feminine & Mellow)">
+            <button type="button" class="voice-gender-btn active" id="voiceBtnUsFemale" data-voice="af_heart" data-accent="us" data-gender="female" aria-label="USA Female Voice (Heart - Mellow)" title="American English - Female (Heart: Feminine & Mellow)">
               <span class="gender-sym">♀</span>
               <span class="gender-name">Female</span>
             </button>
@@ -110,19 +87,27 @@
             </button>
           </div>
         </div>
+
+        <!-- 🇬🇧 UK English Flag Button Group -->
+        <div class="voice-flag-card" id="flagCardUK" data-accent="uk">
+          <div class="flag-badge-btn" title="British English (Received Pronunciation / Oxford Cadence)">
+            <span class="flag-emblem" aria-hidden="true">🇬🇧</span>
+            <span class="flag-title">UK English</span>
+          </div>
+          <div class="voice-gender-split" role="group" aria-label="UK English Voice Selection">
+            <button type="button" class="voice-gender-btn" id="voiceBtnUkFemale" data-voice="bf_isabella" data-accent="uk" data-gender="female" aria-label="UK Female Voice (Isabella - Mellow)" title="British English - Female (Isabella: Feminine & Mellow)">
+              <span class="gender-sym">♀</span>
+              <span class="gender-name">Female</span>
+            </button>
+            <button type="button" class="voice-gender-btn" id="voiceBtnUkMale" data-voice="bm_fable" data-accent="uk" data-gender="male" aria-label="UK Male Voice (Fable - Calm & Deep)" title="British English - Male (Fable: Calm & Deep)">
+              <span class="gender-sym">♂</span>
+              <span class="gender-name">Male</span>
+            </button>
+          </div>
+        </div>
       </div>
 
-      <!-- Engine Status & Quick Preview -->
-      <div class="voice-engine-tag" id="voiceEngineTag" title="Click to toggle between Kokoro Neural (Studio Quality) and Fast Native Speech (0ms)" role="button" tabindex="0" aria-label="Toggle TTS Engine Mode">
-        <span class="engine-status-dot" id="engineStatusDot"></span>
-        <span class="engine-status-text" id="engineStatusText">Kokoro Neural</span>
-        <button type="button" class="btn-voice-preview" id="previewVoiceBtn" title="Test Voice Preview" aria-label="Listen to Voice Preview">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
-            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-          </svg>
-          <span>Preview</span>
-        </button>
-      </div>
+
     </section>
 
     <!-- Phase Stepper -->
@@ -967,7 +952,7 @@
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
                 <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
               </svg>
-              Listen to Model (British RP)
+              <span id="playModelAudioBtnText">Listen to Model (USA Female - Heart)</span>
             </button>
             <button id="stopModelAudioBtn" class="btn btn-secondary" style="display: none;">
               Stop Audio
@@ -1006,8 +991,7 @@
           <span style="display: flex; align-items: center; gap: 6px;"><span
               style="width: 12px; height: 12px; background: rgba(244, 63, 94, 0.3); border: 1px solid var(--crimson); border-radius: 2px;"></span>
             Omitted / Mispronounced</span>
-          <span style="margin-left: auto; font-style: italic; color: var(--gold-light);">Tip: Click any word to hear its
-            native British pronunciation!</span>
+          <span id="speakingVoiceTip" style="margin-left: auto; font-style: italic; color: var(--gold-light);">Tip: Click any word to hear its <span id="speakingVoiceTipName">USA Female (Heart)</span> pronunciation!</span>
         </div>
 
       </div>
@@ -1242,26 +1226,6 @@
     </div>
   </div>
 
-  <!-- History & Progress Drawer -->
-  <aside class="history-drawer" id="historyDrawer">
-    <div class="drawer-header">
-      <h3>Training History</h3>
-      <button id="closeHistoryBtn" class="btn btn-secondary btn-icon-only">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
-      </button>
-    </div>
-    <div class="history-list" id="historyList">
-      <!-- Populated dynamically -->
-    </div>
-    <div
-      style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle); display: flex; justify-content: space-between;">
-      <button id="clearHistoryBtn" class="btn btn-secondary" style="font-size: 11px;">Clear History</button>
-      <span style="font-size: 11px; color: var(--text-muted); align-self: center;">Saved locally</span>
-    </div>
-  </aside>
 
   <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>

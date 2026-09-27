@@ -1,0 +1,16 @@
+﻿{
+  "name": "fluentedge-audio-pipeline",
+  "version": "1.0.0",
+  "description": "FluentEdge C1/C2 English Training - Audio Pre-generation Pipeline",
+  "type": "module",
+  "scripts": {
+    "generate-audio": "node scripts/generate_audio.mjs --voice bf_isabella --speed 0.85 --resume",
+    "generate-audio-test": "node scripts/generate_audio.mjs --voice bf_isabella --limit 10 --resume"
+  },
+  "dependencies": {
+    "kokoro-js": "^1.2.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

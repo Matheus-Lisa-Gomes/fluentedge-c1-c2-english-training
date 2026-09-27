@@ -31,6 +31,11 @@ try {
                 ".svg"  { "image/svg+xml" }
                 ".png"  { "image/png" }
                 ".jpg"  { "image/jpeg" }
+                ".webm" { "audio/webm" }
+                ".opus" { "audio/ogg; codecs=opus" }
+                ".wav"  { "audio/wav" }
+                ".mp3"  { "audio/mpeg" }
+                ".csv"  { "text/csv; charset=utf-8" }
                 default { "application/octet-stream" }
             }
 
