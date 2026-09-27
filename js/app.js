@@ -1774,17 +1774,60 @@ class FluentEdgeApp {
     await this.speechEngine.startListening(this.dom.visualizerCanvas);
   }
 
-  stopSpeakingSession() {
+  async stopSpeakingSession() {
     this.speechEngine.stopListening();
-    const report = this.speechEngine.getFinalSpeakingAssessment();
-    this.renderSpeakingReport(report);
+
+    // Show sleek analysis state on stop speaking button
+    if (this.dom.stopSpeakingBtn) {
+      this.dom.stopSpeakingBtn.disabled = true;
+      this.dom.stopSpeakingBtn.innerHTML = `
+        <svg class="spin" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>
+        <span>Whisper AI Evaluating...</span>
+      `;
+    }
+
+    try {
+      const report = await this.speechEngine.generateFinalAssessment();
+      if (report && report.tokens) {
+        this.updateTeleprompterDisplay(report.tokens);
+      }
+      this.renderSpeakingReport(report);
+    } catch (e) {
+      console.warn("Evaluation report fallback:", e);
+      const report = this.speechEngine.getFinalSpeakingAssessment();
+      this.renderSpeakingReport(report);
+    } finally {
+      if (this.dom.stopSpeakingBtn) {
+        this.dom.stopSpeakingBtn.disabled = false;
+        this.dom.stopSpeakingBtn.innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+          </svg>
+          <span>Stop Speaking &amp; Evaluate</span>
+        `;
+      }
+    }
   }
 
   renderSpeakingReport(report) {
     this.dom.speakingReportPanel.style.display = 'block';
+    const isWhisper = !!report.isWhisperGroundTruth;
+
     this.dom.speakingReportPanel.innerHTML = `
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h3>C1–C2 Speaking Practice Assessment</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
+        <div>
+          <h3 style="margin: 0 0 4px 0;">C1–C2 Speaking Practice Assessment</h3>
+          ${isWhisper ? `
+            <div class="whisper-ground-truth-tag" title="Decoded on-device using Whisper ONNX with millisecond word timestamps">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+              </svg>
+              <span>Whisper AI Ground Truth (Exact Word Timestamps)</span>
+            </div>
+          ` : `
+            <div style="font-size: 11.5px; color: var(--text-muted);">Real-Time Speech Stream Evaluation</div>
+          `}
+        </div>
         <span class="cefr-pill ${report.meetsC1Speaking ? 'badge-c1' : 'badge-b2'}">${report.speakingBand}</span>
       </div>
 
@@ -1798,7 +1841,7 @@ class FluentEdgeApp {
         <div class="scale-card" style="text-align: center;">
           <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Fluency & Pacing</div>
           <div style="font-size: 32px; font-weight: 800; color: var(--blue-accent); font-family: var(--font-serif);">${report.wpm} <span style="font-size: 14px;">WPM</span></div>
-          <div style="font-size: 12px; color: var(--text-secondary);">Target: 130-160 WPM</div>
+          <div style="font-size: 12px; color: var(--text-secondary);">${isWhisper ? `Phonation: ${report.activeSpeechDuration || report.elapsedSeconds}s (pure speech)` : 'Target: 130-160 WPM'}</div>
         </div>
 
         <div class="scale-card" style="text-align: center;">
@@ -1829,6 +1872,18 @@ class FluentEdgeApp {
           </ul>
         </div>
       </div>
+
+      ${isWhisper && report.whisperTranscribedText ? `
+        <div class="whisper-transcript-box">
+          <div class="whisper-transcript-header">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Whisper Captured Audio Transcript</span>
+          </div>
+          <p class="whisper-transcript-text">"${report.whisperTranscribedText}"</p>
+        </div>
+      ` : ''}
 
       <div style="margin-top: 18px; text-align: center;">
         <button id="retrySpeakingBtn" class="btn btn-secondary">

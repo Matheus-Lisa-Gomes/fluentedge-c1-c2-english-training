@@ -79,6 +79,26 @@ export class SpeechEngine {
     // Tiny synthesized 'tap' played at t=0 so the button feels instant.
     this._clickBuffer = null; // Lazy-created on first use
 
+    // ── Phase 2: In-Browser Whisper Speech Recognition Worker ───────
+    // whisper-worker.js runs Whisper ONNX inference entirely off-thread
+    // using @huggingface/transformers. Delivers ground-truth transcription,
+    // exact word timestamps, and uncorrupted phonation duration.
+    this.whisperWorker = null;
+    this.whisperReady = false;
+    this.whisperLoading = false;
+    this._whisperPending = new Map();
+    this._whisperReqId = 0;
+    this.whisperStatus = 'idle'; // 'idle' | 'initializing' | 'ready' | 'transcribing' | 'error'
+    this.whisperDevice = 'wasm';
+    this.onWhisperStatus = null;
+
+    // Audio capture pipeline for Whisper
+    this.mediaRecorder = null;
+    this.recordedAudioChunks = [];
+    this.lastRecordedBlob = null;
+    this.lastWhisperResult = null;
+    this.initWhisperWorker();
+
     // Callbacks
     this.onWordUpdate = null;
     this.onStateChange = null;
@@ -269,6 +289,434 @@ export class SpeechEngine {
       this._workerPending.set(id, { resolve, reject });
       this.worker.postMessage({ type: 'synthesize', id, text, voiceId, speed });
     });
+  }
+
+  // ================================================================
+  // PHASE 2: IN-BROWSER WHISPER SPEECH RECOGNITION WORKER
+  // ================================================================
+
+  /**
+   * Initialise the Whisper Speech Recognition Web Worker.
+   * Runs Whisper ONNX inference entirely off the main thread.
+   */
+  initWhisperWorker() {
+    if (this.whisperWorker || this.whisperLoading) return;
+    this.whisperLoading = true;
+    this.whisperStatus = 'initializing';
+    if (this.onWhisperStatus) this.onWhisperStatus({ status: 'initializing', message: 'Loading Whisper ASR model...' });
+
+    try {
+      this.whisperWorker = new Worker('./js/workers/whisper-worker.js', { type: 'module' });
+    } catch (e) {
+      console.warn('[SpeechEngine] Could not create Whisper Worker:', e);
+      this.whisperLoading = false;
+      this.whisperStatus = 'error';
+      return;
+    }
+
+    this.whisperWorker.onmessage = (event) => {
+      const msg = event.data;
+      if (!msg) return;
+
+      switch (msg.type) {
+        case 'ready':
+          this.whisperReady = true;
+          this.whisperLoading = false;
+          this.whisperStatus = 'ready';
+          this.whisperDevice = msg.device || 'wasm';
+          console.log(`[SpeechEngine] Whisper worker ready on ${this.whisperDevice}.`);
+          if (this.onWhisperStatus) this.onWhisperStatus({ status: 'ready', device: this.whisperDevice });
+          break;
+
+        case 'init_failed':
+          this.whisperLoading = false;
+          this.whisperReady = false;
+          this.whisperStatus = 'error';
+          console.warn('[SpeechEngine] Whisper worker init failed:', msg.message);
+          if (this.onWhisperStatus) this.onWhisperStatus({ status: 'error', message: msg.message });
+          break;
+
+        case 'progress':
+          if (this.onWhisperStatus) this.onWhisperStatus({ status: 'downloading', data: msg.data });
+          break;
+
+        case 'result': {
+          const pending = this._whisperPending.get(msg.id);
+          if (pending) {
+            this._whisperPending.delete(msg.id);
+            pending.resolve({ text: msg.text, chunks: msg.chunks });
+          }
+          break;
+        }
+
+        case 'error': {
+          const pending = this._whisperPending.get(msg.id);
+          if (pending) {
+            this._whisperPending.delete(msg.id);
+            pending.reject(new Error(msg.message));
+          }
+          break;
+        }
+
+        case 'status':
+          this.whisperStatus = msg.state;
+          if (this.onWhisperStatus) this.onWhisperStatus({ status: msg.state, message: msg.message });
+          break;
+
+        default:
+          break;
+      }
+    };
+
+    this.whisperWorker.onerror = (err) => {
+      console.error('[SpeechEngine] Whisper worker error:', err);
+      this.whisperLoading = false;
+      this.whisperReady = false;
+      this.whisperStatus = 'error';
+      if (this.onWhisperStatus) this.onWhisperStatus({ status: 'error', message: err.message });
+    };
+
+    this.whisperWorker.postMessage({ type: 'init' });
+  }
+
+  /**
+   * Transcribe Float32Array 16kHz audio data via Whisper Web Worker.
+   */
+  _workerTranscribe(audioData) {
+    return new Promise((resolve, reject) => {
+      if (!this.whisperWorker || !this.whisperReady) {
+        reject(new Error('Whisper worker not ready'));
+        return;
+      }
+      const id = ++this._whisperReqId;
+      this._whisperPending.set(id, { resolve, reject });
+      this.whisperWorker.postMessage({ type: 'transcribe', id, audioData }, [audioData.buffer]);
+    });
+  }
+
+  /**
+   * Helper to ensure a clean microphone MediaStream without destroying user permission handles.
+   */
+  async ensureMediaStream() {
+    if (this.mediaStream && this.mediaStream.active && this.mediaStream.getAudioTracks().length > 0) {
+      this.mediaStream.getAudioTracks().forEach(track => { track.enabled = true; });
+      return this.mediaStream;
+    }
+    this.mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        latency: 0
+      },
+      video: false
+    });
+    return this.mediaStream;
+  }
+
+  /**
+   * Start in-memory audio recording for Whisper ground-truth speech evaluation.
+   */
+  async startAudioRecording() {
+    this.recordedAudioChunks = [];
+    this.lastRecordedBlob = null;
+    this.lastWhisperResult = null;
+
+    try {
+      const stream = await this.ensureMediaStream();
+      if (typeof MediaRecorder !== 'undefined') {
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+          ? 'audio/webm;codecs=opus'
+          : (MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '');
+
+        const options = mimeType ? { mimeType } : undefined;
+        this.mediaRecorder = new MediaRecorder(stream, options);
+
+        this.mediaRecorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            this.recordedAudioChunks.push(event.data);
+          }
+        };
+
+        this.mediaRecorder.start(200);
+      }
+    } catch (err) {
+      console.warn('[SpeechEngine] Audio recording setup note:', err);
+    }
+  }
+
+  /**
+   * Stop audio recording and resolve with recorded audio Blob.
+   */
+  stopAudioRecording() {
+    return new Promise((resolve) => {
+      if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+        resolve(this.lastRecordedBlob);
+        return;
+      }
+
+      this.mediaRecorder.onstop = () => {
+        try {
+          const mimeType = this.mediaRecorder.mimeType || 'audio/webm';
+          this.lastRecordedBlob = new Blob(this.recordedAudioChunks, { type: mimeType });
+          resolve(this.lastRecordedBlob);
+        } catch (e) {
+          resolve(null);
+        }
+      };
+
+      try {
+        this.mediaRecorder.stop();
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  /**
+   * Resample an audio blob into a 16,000 Hz mono Float32Array for Whisper model input.
+   */
+  async resampleAudioBlobTo16k(blob) {
+    if (!blob || blob.size === 0) return null;
+    try {
+      const arrayBuffer = await blob.arrayBuffer();
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      const tempAudioCtx = new AudioCtx();
+      const decodedBuffer = await tempAudioCtx.decodeAudioData(arrayBuffer);
+      await tempAudioCtx.close();
+
+      const targetSampleRate = 16000;
+      const numChannels = 1;
+      const targetLength = Math.max(1, Math.ceil(decodedBuffer.duration * targetSampleRate));
+      const offlineCtx = new OfflineAudioContext(numChannels, targetLength, targetSampleRate);
+
+      const bufferSource = offlineCtx.createBufferSource();
+      bufferSource.buffer = decodedBuffer;
+      bufferSource.connect(offlineCtx.destination);
+      bufferSource.start(0);
+
+      const renderedBuffer = await offlineCtx.startRendering();
+      return renderedBuffer.getChannelData(0);
+    } catch (err) {
+      console.warn('[SpeechEngine] resampleAudioBlobTo16k error:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Run Whisper evaluation if worker is ready and recorded audio exists.
+   * Resolves with the final assessment report (enhanced by Whisper ground-truth if available).
+   */
+  async generateFinalAssessment() {
+    const baseReport = this.getFinalSpeakingAssessment();
+
+    if (!this.lastRecordedBlob || !this.whisperReady) {
+      return baseReport;
+    }
+
+    try {
+      const audioData = await this.resampleAudioBlobTo16k(this.lastRecordedBlob);
+      if (!audioData || audioData.length < 1600) {
+        return baseReport;
+      }
+
+      // Transcribe via Whisper Web Worker with a safe timeout of 10 seconds
+      const transcribePromise = this._workerTranscribe(audioData);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Whisper transcription timed out')), 10000)
+      );
+
+      const whisperResult = await Promise.race([transcribePromise, timeoutPromise]);
+      this.lastWhisperResult = whisperResult;
+
+      return this.computeWhisperEnhancedAssessment(whisperResult, baseReport);
+    } catch (err) {
+      console.warn('[SpeechEngine] Whisper evaluation note, using base assessment:', err);
+      return baseReport;
+    }
+  }
+
+  /**
+   * Compute ground-truth CEFR assessment and exact phonation WPM from Whisper chunks.
+   */
+  computeWhisperEnhancedAssessment(whisperResult, baseReport) {
+    if (!whisperResult || !whisperResult.chunks || whisperResult.chunks.length === 0) {
+      return baseReport;
+    }
+
+    const chunks = whisperResult.chunks;
+    const spokenTokens = [];
+
+    // Extract all spoken words with timestamps
+    for (const chunk of chunks) {
+      const words = chunk.text.trim().split(/\s+/);
+      const [chunkStart, chunkEnd] = Array.isArray(chunk.timestamp) ? chunk.timestamp : [0, 0];
+      const duration = Math.max(0.01, (chunkEnd || 0) - (chunkStart || 0));
+      const wordDuration = duration / Math.max(1, words.length);
+
+      words.forEach((w, idx) => {
+        const clean = this.cleanWord(w);
+        if (clean) {
+          spokenTokens.push({
+            raw: w,
+            clean: clean,
+            start: (chunkStart || 0) + (idx * wordDuration),
+            end: (chunkStart || 0) + ((idx + 1) * wordDuration)
+          });
+        }
+      });
+    }
+
+    if (spokenTokens.length === 0) {
+      return baseReport;
+    }
+
+    // 1. Phonation duration (articulate speaking time excluding initial/terminal dead silences)
+    const firstWordStart = spokenTokens[0].start || 0;
+    const lastWordEnd = spokenTokens[spokenTokens.length - 1].end || (this.elapsedSeconds || 1);
+    const activeSpeechDuration = Math.max(0.5, lastWordEnd - firstWordStart);
+    const activeMinutes = activeSpeechDuration / 60;
+
+    // 2. High-precision Target Token Alignment
+    let spokenIdx = 0;
+    let matchedCount = 0;
+    let deviationCount = 0;
+    let omittedCount = 0;
+
+    const evaluatedTokens = this.targetTokens.map(t => ({ ...t }));
+
+    for (let i = 0; i < evaluatedTokens.length; i++) {
+      const target = evaluatedTokens[i];
+      let bestSim = 0;
+      let bestIdx = -1;
+
+      // Look ahead up to 6 spoken words for best match
+      const windowEnd = Math.min(spokenTokens.length, spokenIdx + 6);
+      for (let j = spokenIdx; j < windowEnd; j++) {
+        const candidate = spokenTokens[j];
+        const sim = calculateWordSimilarity(target.clean, candidate.clean);
+        if (sim > bestSim) {
+          bestSim = sim;
+          bestIdx = j;
+        }
+        if (sim === 1.0) break;
+      }
+
+      if (bestSim >= 0.82) {
+        target.status = 'matched';
+        matchedCount++;
+        spokenIdx = bestIdx + 1;
+      } else if (bestSim >= 0.58) {
+        target.status = 'deviation';
+        deviationCount++;
+        spokenIdx = bestIdx + 1;
+      } else {
+        target.status = 'omitted';
+        omittedCount++;
+      }
+    }
+
+    const totalWords = evaluatedTokens.length;
+    const discourseWords = Math.max(spokenTokens.length, matchedCount + deviationCount);
+    const wpm = Math.round(discourseWords / activeMinutes);
+    const pronunciationAccuracy = totalWords > 0
+      ? Math.min(100, Math.round(((matchedCount + (deviationCount * 0.65)) / totalWords) * 100))
+      : 0;
+
+    const readRatio = totalWords > 0
+      ? Math.min(100, Math.round((Math.max(matchedCount + deviationCount, spokenTokens.length) / totalWords) * 100))
+      : 0;
+
+    // CEFR Speaking Scales (0-5)
+    let pronunciationScore = 5.0;
+    const pronunciationFeedback = [];
+    if (pronunciationAccuracy >= 88) {
+      pronunciationScore = 5.0;
+      pronunciationFeedback.push("Exceptional phonological precision and phonemic clarity across polysyllabic vocabulary.");
+    } else if (pronunciationAccuracy >= 76) {
+      pronunciationScore = 4.2;
+      pronunciationFeedback.push("Clear intelligibility with natural intonation. Minor phoneme deviations did not impede comprehension.");
+    } else if (pronunciationAccuracy >= 62) {
+      pronunciationScore = 3.2;
+      pronunciationFeedback.push("Noticeable accent interference or slurred word endings on complex C1 terms. Practice deliberate articulation.");
+    } else {
+      pronunciationScore = 2.0;
+      pronunciationFeedback.push("Frequent mispronunciations or omitted clauses requiring deliberate articulation practice.");
+    }
+
+    let fluencyScore = 5.0;
+    const fluencyFeedback = [];
+    if (wpm >= 130 && wpm <= 165) {
+      fluencyScore = 5.0;
+      fluencyFeedback.push(`Optimal native-speed pacing at ${wpm} WPM with confident, uninterrupted delivery.`);
+    } else if ((wpm >= 110 && wpm < 130) || (wpm > 165 && wpm <= 185)) {
+      fluencyScore = 4.0;
+      fluencyFeedback.push(`Acceptable speaking rate (${wpm} WPM). Aim for consistent 135-150 WPM cadence with natural thought-group pauses.`);
+    } else if (wpm < 110) {
+      fluencyScore = 3.0;
+      fluencyFeedback.push(`Hesitant pace (${wpm} WPM). Work on smooth transitional phrasing to minimize unnatural pauses.`);
+    } else {
+      fluencyScore = 3.5;
+      fluencyFeedback.push(`Rushed pace (${wpm} WPM). Slow down slightly to emphasize rhetorical stress on key academic vocabulary.`);
+    }
+
+    let discourseScore = 5.0;
+    const discourseFeedback = [];
+    if (readRatio >= 95) {
+      discourseScore = 5.0;
+      discourseFeedback.push("Comprehensive text articulation: completed full passage without missing structural phrases.");
+    } else if (readRatio >= 80) {
+      discourseScore = 4.0;
+      discourseFeedback.push(`Good textual coverage (${readRatio}%). A few clauses were skipped or incomplete.`);
+    } else {
+      discourseScore = 2.5;
+      discourseFeedback.push(`Incomplete discourse delivery (${readRatio}% coverage). Ensure full sentences are vocalised to completion.`);
+    }
+
+    const overallSpeakingTotal = (pronunciationScore + fluencyScore + discourseScore) / 3;
+    const overallPercentage = Math.round((overallSpeakingTotal / 5) * 100);
+
+    let speakingBand = "B2 (Vantage)";
+    let meetsC1Speaking = false;
+
+    if (overallPercentage >= 85 && pronunciationAccuracy >= 82) {
+      speakingBand = "Band 5 (C2 - Exceptional Fluency & Native Cadence)";
+      meetsC1Speaking = true;
+    } else if (overallPercentage >= 70 && pronunciationAccuracy >= 75) {
+      speakingBand = "Band 4 (Estimated C1 - Advanced Level)";
+      meetsC1Speaking = true;
+    } else if (overallPercentage >= 50) {
+      speakingBand = "Band 2-3 (B2 - Competent but Needs Fluidity Practice)";
+      meetsC1Speaking = false;
+    } else {
+      speakingBand = "Band 1 (B1 - Substantial Phonetic Revision Needed)";
+      meetsC1Speaking = false;
+    }
+
+    return {
+      pronunciationAccuracy,
+      wpm,
+      elapsedSeconds: Math.round(activeSpeechDuration),
+      rawElapsedSeconds: this.elapsedSeconds,
+      matchedCount,
+      deviationCount,
+      omittedCount,
+      totalWords,
+      readRatio: Math.min(100, Math.round(readRatio)),
+      speakingBand,
+      overallPercentage,
+      meetsC1Speaking,
+      isWhisperGroundTruth: true,
+      whisperTranscribedText: whisperResult.text,
+      activeSpeechDuration: activeSpeechDuration.toFixed(1),
+      scores: {
+        pronunciation: { score: Number(pronunciationScore.toFixed(1)), max: 5, feedback: pronunciationFeedback },
+        fluency: { score: Number(fluencyScore.toFixed(1)), max: 5, feedback: fluencyFeedback },
+        discourse: { score: Number(discourseScore.toFixed(1)), max: 5, feedback: discourseFeedback }
+      },
+      tokens: evaluatedTokens
+    };
   }
 
   // ================================================================
@@ -718,6 +1166,12 @@ export class SpeechEngine {
         this.initRecognition();
       }
       this.recognition.start();
+
+      // Start recording audio stream for Whisper ground-truth assessment
+      this.startAudioRecording().catch(err => {
+        console.warn("[SpeechEngine] Whisper audio recording initialization note:", err);
+      });
+
       // Start visualizer non-blockingly with micro-delay so speech recognition grabs audio driver first
       if (canvasElement) {
         setTimeout(() => {
@@ -736,7 +1190,7 @@ export class SpeechEngine {
     }
   }
 
-  stopListening() {
+  async stopListening() {
     if (this.recognition && this.isListening) {
       try {
         this.recognition.stop();
@@ -746,6 +1200,7 @@ export class SpeechEngine {
     }
     this.isListening = false;
     this.stopDurationTracker();
+    await this.stopAudioRecording();
     this.stopAudioVisualizer();
   }
 
@@ -1275,21 +1730,10 @@ export class SpeechEngine {
         await this.audioContext.resume();
       }
 
-      // Reuse active media stream if already acquired in this page session
-      if (this.mediaStream && this.mediaStream.active) {
-        this.mediaStream.getAudioTracks().forEach(track => { track.enabled = true; });
-      } else {
-        this.mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: false, // Don't run heavy software filter on visualizer tap
-            noiseSuppression: false, // Don't gate or buffer audio
-            autoGainControl: false,  // Don't fight speech recognition AGC
-            channelCount: 1,
-            latency: 0
-          },
-          video: false
-        });
-        const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+      // Reuse active media stream or obtain via ensureMediaStream
+      const stream = await this.ensureMediaStream();
+      if (!this.analyser) {
+        const source = this.audioContext.createMediaStreamSource(stream);
         this.analyser = this.audioContext.createAnalyser();
         this.analyser.fftSize = 256;
         source.connect(this.analyser);

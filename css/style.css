@@ -3969,4 +3969,62 @@ body.theme-c2 .ai-step-idx {
   }
 }
 
+/* ================================================================
+   WHISPER GROUND-TRUTH ASSESSMENT STYLES
+   ================================================================ */
+.whisper-ground-truth-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(78, 205, 196, 0.12);
+  border: 1px solid rgba(78, 205, 196, 0.35);
+  color: #4ecdc4;
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  margin-top: 3px;
+  letter-spacing: 0.02em;
+}
+
+.whisper-transcript-box {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(78, 205, 196, 0.2);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  position: relative;
+}
+
+.whisper-transcript-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4ecdc4;
+  margin-bottom: 8px;
+}
+
+.whisper-transcript-text {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  font-style: italic;
+  margin: 0;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+
 
