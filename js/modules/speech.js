@@ -26,6 +26,7 @@ export class SpeechEngine {
     this.spokenTranscripts = [];
     this.currentWordIndex = 0;
     this.confirmedWordIndex = 0;
+    this.beaconIndex = 0;
 
     // Kokoro Neural TTS & Multi-Voice Engine State
     this.currentVoiceId = 'af_heart'; // Default: US English Female (Heart: Feminine & Mellow)
@@ -525,6 +526,7 @@ export class SpeechEngine {
 
     this.currentWordIndex = 0;
     this.confirmedWordIndex = 0;
+    this.beaconIndex = 0;
     this.spokenTranscripts = [];
     this.elapsedSeconds = 0;
 
@@ -623,18 +625,22 @@ export class SpeechEngine {
         targetWord.status = 'deviation';
         targetIdx++;
       } else {
-        // Lookahead of up to 5 words for fast speech (handles dropped prepositions / rapid transitions)
+        // Beacon Milestone Jump: scan forward up to 15 words ahead
+        // If the speaker articulated ANY word up front, leap the beacon forward to it!
         let foundAhead = false;
-        const maxLookahead = Math.min(5, this.targetTokens.length - targetIdx - 1);
+        const maxLookahead = Math.min(15, this.targetTokens.length - targetIdx - 1);
 
         for (let lookahead = 1; lookahead <= maxLookahead; lookahead++) {
           const aheadWord = this.targetTokens[targetIdx + lookahead];
           const aheadSim = calculateWordSimilarity(spokenWord, aheadWord.clean);
           const isAheadPrefix = (spokenWord.length >= 3 && aheadWord.clean.startsWith(spokenWord));
 
-          if (aheadSim >= 0.78 || isAheadPrefix) {
-            // Found match ahead!
-            // Only mark skipped intermediate words as 'omitted' if this is a confirmed final chunk
+          // Adaptive confidence threshold based on jump distance
+          const threshold = lookahead > 6 ? 0.84 : 0.78;
+
+          if (aheadSim >= threshold || isAheadPrefix) {
+            // Milestone match found up front!
+            // Mark skipped words as omitted so they are visually accounted for
             if (isFinal) {
               for (let k = 0; k < lookahead; k++) {
                 if (this.targetTokens[targetIdx + k].status === 'pending') {
@@ -642,7 +648,7 @@ export class SpeechEngine {
                 }
               }
             }
-            aheadWord.status = 'matched';
+            aheadWord.status = (aheadSim >= 0.82 || isAheadPrefix) ? 'matched' : 'deviation';
             targetIdx = targetIdx + lookahead + 1;
             foundAhead = true;
             break;
@@ -664,6 +670,8 @@ export class SpeechEngine {
     if (isFinal) {
       this.confirmedWordIndex = this.currentWordIndex;
     }
+    // Beacon tracks the furthest forward milestone reached in the discourse
+    this.beaconIndex = Math.max(this.beaconIndex || 0, this.currentWordIndex);
 
     // Calculate real-time metrics
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
@@ -671,10 +679,10 @@ export class SpeechEngine {
     const totalAttempted = Math.max(1, this.currentWordIndex);
     const accuracy = Math.round(((matchedCount + deviationCount * 0.7) / totalAttempted) * 100);
 
-    // Fluency Cadence (WPM) accounts for all articulated words (both matched & minor deviation)
+    // Speed (WPM) is measured by the beacon's forward progress through the discourse
     const minutes = Math.max(0.05, this.elapsedSeconds / 60);
-    const spokenWordCount = matchedCount + deviationCount;
-    const wpm = Math.round(spokenWordCount / minutes);
+    const discourseWords = Math.max(this.beaconIndex || 0, matchedCount + deviationCount);
+    const wpm = Math.round(discourseWords / minutes);
 
     if (this.onWordUpdate) {
       this.onWordUpdate({
@@ -741,8 +749,8 @@ export class SpeechEngine {
         const minutes = Math.max(0.05, this.elapsedSeconds / 60);
         const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
         const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
-        const spokenWordCount = matchedCount + deviationCount;
-        const wpm = Math.round(spokenWordCount / minutes);
+        const discourseWords = Math.max(this.beaconIndex || 0, matchedCount + deviationCount);
+        const wpm = Math.round(discourseWords / minutes);
         this.onMetricsUpdate({ elapsedSeconds: this.elapsedSeconds, wpm });
       }
     }, 1000);
@@ -763,11 +771,11 @@ export class SpeechEngine {
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
     const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
     const omittedCount = this.targetTokens.filter(t => t.status === 'omitted').length;
-    const readRatio = totalWords > 0 ? ((matchedCount + deviationCount) / totalWords) : 0;
+    const readRatio = totalWords > 0 ? (Math.max((matchedCount + deviationCount), (this.beaconIndex || 0)) / totalWords) : 0;
 
     const minutes = Math.max(0.1, this.elapsedSeconds / 60);
-    const spokenWordCount = matchedCount + deviationCount;
-    const wpm = Math.round(spokenWordCount / minutes);
+    const discourseWords = Math.max(this.beaconIndex || 0, matchedCount + deviationCount);
+    const wpm = Math.round(discourseWords / minutes);
 
     // Accuracy %
     const pronunciationAccuracy = totalWords > 0 
