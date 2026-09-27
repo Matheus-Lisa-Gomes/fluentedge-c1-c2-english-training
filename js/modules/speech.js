@@ -604,6 +604,13 @@ export class SpeechEngine {
 
     let targetIdx = this.confirmedWordIndex;
 
+    // Common stopwords that must NEVER trigger forward leaps
+    const STOP_WORDS = new Set([
+      'the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+      'is', 'it', 'as', 'be', 'are', 'was', 'were', 'that', 'this', 'from', 'but', 'not', 'its'
+    ]);
+    const isStopWord = (w) => STOP_WORDS.has(w) || w.length <= 2;
+
     for (let sIdx = 0; sIdx < spokenWords.length; sIdx++) {
       if (targetIdx >= this.targetTokens.length) break;
 
@@ -620,27 +627,28 @@ export class SpeechEngine {
       if (isDirectMatch || isPrefixMatch) {
         targetWord.status = 'matched';
         targetIdx++;
-      } else if (similarity >= 0.55) {
-        // Minor phoneme / accent inflection deviation
+      } else if (similarity >= 0.55 && !isStopWord(spokenWord)) {
+        // Minor phoneme / accent inflection deviation on content words
         targetWord.status = 'deviation';
         targetIdx++;
       } else {
-        // Beacon Milestone Jump: scan forward up to 15 words ahead
-        // If the speaker articulated ANY word up front, leap the beacon forward to it!
+        // Beacon Milestone Jump with Precision Guard:
+        // Stopwords (the, a, in, is...) can only leap 1 word ahead.
+        // Distinctive content words (length >= 4) can leap up to 6 words (one clause).
         let foundAhead = false;
-        const maxLookahead = Math.min(15, this.targetTokens.length - targetIdx - 1);
+        const allowedHorizon = isStopWord(spokenWord) ? 1 : 6;
+        const maxLookahead = Math.min(allowedHorizon, this.targetTokens.length - targetIdx - 1);
 
         for (let lookahead = 1; lookahead <= maxLookahead; lookahead++) {
           const aheadWord = this.targetTokens[targetIdx + lookahead];
           const aheadSim = calculateWordSimilarity(spokenWord, aheadWord.clean);
-          const isAheadPrefix = (spokenWord.length >= 3 && aheadWord.clean.startsWith(spokenWord));
+          const isAheadPrefix = (spokenWord.length >= 4 && aheadWord.clean.startsWith(spokenWord));
 
-          // Adaptive confidence threshold based on jump distance
-          const threshold = lookahead > 6 ? 0.84 : 0.78;
+          // Distinctive match threshold
+          const threshold = lookahead === 1 ? 0.80 : 0.84;
 
           if (aheadSim >= threshold || isAheadPrefix) {
-            // Milestone match found up front!
-            // Mark skipped words as omitted so they are visually accounted for
+            // Valid milestone match found up front!
             if (isFinal) {
               for (let k = 0; k < lookahead; k++) {
                 if (this.targetTokens[targetIdx + k].status === 'pending') {
