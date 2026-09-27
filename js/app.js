@@ -1750,8 +1750,14 @@ class FluentEdgeApp {
     }
     const spans = this._teleprompterSpans;
     const len = Math.min(tokens.length, spans.length);
+    const activeIdx = this.speechEngine ? this.speechEngine.currentWordIndex : -1;
+
     for (let i = 0; i < len; i++) {
-      const targetClass = `teleprompter-word ${tokens[i].status}`;
+      const isFocus = (i === activeIdx && tokens[i].status === 'pending');
+      const targetClass = isFocus 
+        ? 'teleprompter-word pending active-focus' 
+        : `teleprompter-word ${tokens[i].status}`;
+
       if (spans[i].className !== targetClass) {
         spans[i].className = targetClass;
       }

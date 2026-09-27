@@ -3357,6 +3357,14 @@ body.theme-c2 .req-missing-chip {
   color: #cbd5e1;
 }
 
+.teleprompter-word.active-focus {
+  background: rgba(223, 177, 91, 0.18);
+  outline: 1.5px solid var(--gold-primary);
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(223, 177, 91, 0.35);
+  font-weight: 600;
+}
+
 .teleprompter-word.matched {
   background: rgba(16, 185, 129, 0.28);
   color: #6ee7b7;

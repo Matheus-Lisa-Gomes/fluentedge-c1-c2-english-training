@@ -103,8 +103,8 @@ export class SpeechEngine {
     this.recognition = new SpeechRecognition();
     this.recognition.continuous = true;
     this.recognition.interimResults = true;
-    this.recognition.maxAlternatives = 1; // Prioritize fastest 1-best decode over multi-hypothesis serialization
-    this.recognition.lang = 'en-US'; // American English standard (matches default af_heart voice)
+    this.recognition.maxAlternatives = 1;
+    this.recognition.lang = this.currentAccent === 'uk' ? 'en-GB' : 'en-US';
 
     this.recognition.onstart = () => {
       this.isListening = true;
@@ -527,6 +527,25 @@ export class SpeechEngine {
     this.confirmedWordIndex = 0;
     this.spokenTranscripts = [];
     this.elapsedSeconds = 0;
+
+    // Phase 2: JSGF Grammar Biasing (SpeechGrammarList)
+    // Biases cloud ASR acoustic decoder beam search with the essay's exact vocabulary,
+    // dramatically accelerating confidence convergence on polysyllabic C1/C2 terms.
+    const SpeechGrammarList = window.SpeechGrammarList || window.webkitSpeechGrammarList;
+    if (SpeechGrammarList) {
+      try {
+        if (!this.recognition) this.initRecognition();
+        const uniqueWords = Array.from(new Set(this.targetTokens.map(t => t.clean))).filter(w => w.length > 1);
+        if (uniqueWords.length > 0 && this.recognition) {
+          const grammar = `#JSGF V1.0 UTF-8; grammar essayWords; public <word> = ${uniqueWords.join(' | ')} ;`;
+          const speechRecognitionList = new SpeechGrammarList();
+          speechRecognitionList.addFromString(grammar, 1.0);
+          this.recognition.grammars = speechRecognitionList;
+        }
+      } catch (e) {
+        // SpeechGrammarList is optional across some browser configurations; gracefully continue
+      }
+    }
   }
 
   /**
