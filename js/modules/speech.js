@@ -108,6 +108,8 @@ export class SpeechEngine {
     this.onError = null;
     this.onEngineStatusChange = null;
     this.onVoiceChange = null;
+    this.onComplete = null;
+    this._autoStopTimer = null;
 
     this.initRecognition();
   }
@@ -1020,6 +1022,10 @@ export class SpeechEngine {
     this._smoothedWpm = 0;
     this.spokenTranscripts = [];
     this.elapsedSeconds = 0;
+    if (this._autoStopTimer) {
+      clearTimeout(this._autoStopTimer);
+      this._autoStopTimer = null;
+    }
 
     // Phase 2: JSGF Grammar Biasing (SpeechGrammarList)
     // Biases cloud ASR acoustic decoder beam search with the essay's exact vocabulary,
@@ -1207,9 +1213,39 @@ export class SpeechEngine {
         elapsedSeconds: this.elapsedSeconds
       });
     }
+
+    // Automatic Completion Guard:
+    // When the speaker reaches the final word of the text, automatically conclude
+    // the recording session after a short buffer (~500ms) to ensure full trailing
+    // audio capture into MediaRecorder for Whisper ground truth.
+    const isCompleted = this.targetTokens.length > 0 && this.currentWordIndex >= this.targetTokens.length;
+    if (this.isListening && isCompleted) {
+      if (!this._autoStopTimer) {
+        const delay = (isFinal && this.confirmedWordIndex >= this.targetTokens.length) ? 400 : 550;
+        this._autoStopTimer = setTimeout(() => {
+          this._autoStopTimer = null;
+          if (this.isListening && this.currentWordIndex >= this.targetTokens.length) {
+            if (this.onComplete) {
+              this.onComplete();
+            }
+          }
+        }, delay);
+      }
+    } else {
+      // If an interim fluctuation momentarily leaped to the end and then rolled back, cancel timer
+      if (this._autoStopTimer && this.currentWordIndex < this.targetTokens.length) {
+        clearTimeout(this._autoStopTimer);
+        this._autoStopTimer = null;
+      }
+    }
   }
 
   async startListening(canvasElement) {
+    if (this._autoStopTimer) {
+      clearTimeout(this._autoStopTimer);
+      this._autoStopTimer = null;
+    }
+
     if (!this.isSpeechSupported()) {
       if (this.onError) this.onError("Your browser does not support Speech Recognition. Try Chrome, Edge, or Safari.");
       return;
@@ -1247,6 +1283,10 @@ export class SpeechEngine {
   }
 
   async stopListening() {
+    if (this._autoStopTimer) {
+      clearTimeout(this._autoStopTimer);
+      this._autoStopTimer = null;
+    }
     if (this.recognition && this.isListening) {
       try {
         this.recognition.stop();
@@ -1258,6 +1298,7 @@ export class SpeechEngine {
     this.stopDurationTracker();
     await this.stopAudioRecording();
     this.stopAudioVisualizer();
+    if (this.onStateChange) this.onStateChange({ status: 'idle' });
   }
 
   startDurationTracker() {

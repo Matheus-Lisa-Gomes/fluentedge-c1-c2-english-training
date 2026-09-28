@@ -161,6 +161,7 @@ class FluentEdgeApp {
       // Speaking Studio
       returnToWritingBtn: document.getElementById('returnToWritingBtn'),
       teleprompterText: document.getElementById('teleprompterText'),
+      retrySpeakingBtn: document.getElementById('retrySpeakingBtn'),
       startSpeakingBtn: document.getElementById('startSpeakingBtn'),
       stopSpeakingBtn: document.getElementById('stopSpeakingBtn'),
       playModelAudioBtn: document.getElementById('playModelAudioBtn'),
@@ -305,6 +306,9 @@ class FluentEdgeApp {
 
     // Speaking Studio events
     this.dom.returnToWritingBtn.addEventListener('click', () => this.returnToWriting());
+    if (this.dom.retrySpeakingBtn) {
+      this.dom.retrySpeakingBtn.addEventListener('click', () => this.retrySpeakingSession());
+    }
     this.dom.startSpeakingBtn.addEventListener('click', () => this.startSpeakingSession());
     this.dom.stopSpeakingBtn.addEventListener('click', () => this.stopSpeakingSession());
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
@@ -478,14 +482,22 @@ class FluentEdgeApp {
     this.speechEngine.onStateChange = ({ status }) => {
       if (status === 'recording') {
         this.dom.startSpeakingBtn.style.display = 'none';
+        if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'none';
         this.dom.stopSpeakingBtn.style.display = 'inline-flex';
       } else if (status === 'idle') {
-        this.dom.startSpeakingBtn.style.display = 'inline-flex';
-        this.dom.stopSpeakingBtn.style.display = 'none';
+        if (!this._isEvaluatingSpeech) {
+          this.dom.startSpeakingBtn.style.display = 'inline-flex';
+          if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
+          this.dom.stopSpeakingBtn.style.display = 'none';
+        }
       } else if (status === 'model_speaking') {
         this.dom.playModelAudioBtn.style.display = 'none';
         this.dom.stopModelAudioBtn.style.display = 'inline-flex';
       }
+    };
+
+    this.speechEngine.onComplete = () => {
+      this.stopSpeakingSession();
     };
 
     this.speechEngine.onWordUpdate = ({ tokens, accuracy, wpm, elapsedSeconds }) => {
@@ -1770,23 +1782,56 @@ class FluentEdgeApp {
     this.setStage(2);
   }
 
+  retrySpeakingSession() {
+    const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
+    if (!text) return;
+    this.speechEngine.stopListening();
+    this.speechEngine.stopSpeakingModel();
+    this.speechEngine.setTargetText(text);
+    this.renderTeleprompterTokens(this.speechEngine.targetTokens);
+    this.dom.speakingReportPanel.style.display = 'none';
+    this.dom.liveSpeakingWpm.textContent = '0';
+    this.dom.liveSpeakingAcc.textContent = '0%';
+    this.dom.liveSpeakingTime.textContent = '00:00';
+    this.startSpeakingSession();
+  }
+
   async startSpeakingSession() {
+    const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
+    if (!text) return;
+
+    // If all tokens were already completed, reset before starting again
+    if (this.speechEngine.targetTokens.length > 0 && 
+        this.speechEngine.currentWordIndex >= this.speechEngine.targetTokens.length) {
+      this.speechEngine.setTargetText(text);
+      this.renderTeleprompterTokens(this.speechEngine.targetTokens);
+      this.dom.speakingReportPanel.style.display = 'none';
+      this.dom.liveSpeakingWpm.textContent = '0';
+      this.dom.liveSpeakingAcc.textContent = '0%';
+      this.dom.liveSpeakingTime.textContent = '00:00';
+    }
+
     await this.speechEngine.startListening(this.dom.visualizerCanvas);
   }
 
   async stopSpeakingSession() {
-    this.speechEngine.stopListening();
+    if (this._isEvaluatingSpeech) return;
+    this._isEvaluatingSpeech = true;
 
     // Show sleek analysis state on stop speaking button
     if (this.dom.stopSpeakingBtn) {
+      this.dom.stopSpeakingBtn.style.display = 'inline-flex';
       this.dom.stopSpeakingBtn.disabled = true;
       this.dom.stopSpeakingBtn.innerHTML = `
         <svg class="spin" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>
         <span>Whisper AI Evaluating...</span>
       `;
     }
+    if (this.dom.startSpeakingBtn) this.dom.startSpeakingBtn.style.display = 'none';
+    if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'none';
 
     try {
+      await this.speechEngine.stopListening();
       const report = await this.speechEngine.generateFinalAssessment();
       if (report && report.tokens) {
         this.updateTeleprompterDisplay(report.tokens);
@@ -1797,15 +1842,19 @@ class FluentEdgeApp {
       const report = this.speechEngine.getFinalSpeakingAssessment();
       this.renderSpeakingReport(report);
     } finally {
+      this._isEvaluatingSpeech = false;
       if (this.dom.stopSpeakingBtn) {
         this.dom.stopSpeakingBtn.disabled = false;
+        this.dom.stopSpeakingBtn.style.display = 'none';
         this.dom.stopSpeakingBtn.innerHTML = `
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-            <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="6" y="6" width="12" height="12"></rect>
           </svg>
-          <span>Stop Speaking &amp; Evaluate</span>
+          Finish &amp; Evaluate Speech
         `;
       }
+      if (this.dom.startSpeakingBtn) this.dom.startSpeakingBtn.style.display = 'inline-flex';
+      if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
     }
   }
 
@@ -1884,21 +1933,7 @@ class FluentEdgeApp {
           <p class="whisper-transcript-text">"${report.whisperTranscribedText}"</p>
         </div>
       ` : ''}
-
-      <div style="margin-top: 18px; text-align: center;">
-        <button id="retrySpeakingBtn" class="btn btn-secondary">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"></path></svg>
-          Record Another Attempt
-        </button>
-      </div>
     `;
-
-    document.getElementById('retrySpeakingBtn')?.addEventListener('click', () => {
-      this.speechEngine.setTargetText(this.dom.essayInput.value.trim());
-      this.renderTeleprompterTokens(this.speechEngine.targetTokens);
-      this.dom.speakingReportPanel.style.display = 'none';
-      this.startSpeakingSession();
-    });
   }
 
   playModelAudio() {
