@@ -164,6 +164,8 @@ class FluentEdgeApp {
       retrySpeakingBtn: document.getElementById('retrySpeakingBtn'),
       startSpeakingBtn: document.getElementById('startSpeakingBtn'),
       stopSpeakingBtn: document.getElementById('stopSpeakingBtn'),
+      evaluateReadingBtn: document.getElementById('evaluateReadingBtn'),
+      evaluateReadingBtnText: document.getElementById('evaluateReadingBtnText'),
       playModelAudioBtn: document.getElementById('playModelAudioBtn'),
       playModelAudioBtnText: document.getElementById('playModelAudioBtnText'),
       stopModelAudioBtn: document.getElementById('stopModelAudioBtn'),
@@ -311,6 +313,9 @@ class FluentEdgeApp {
     }
     this.dom.startSpeakingBtn.addEventListener('click', () => this.startSpeakingSession());
     this.dom.stopSpeakingBtn.addEventListener('click', () => this.stopSpeakingSession());
+    if (this.dom.evaluateReadingBtn) {
+      this.dom.evaluateReadingBtn.addEventListener('click', () => this.handleEvaluateReading());
+    }
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
     this.dom.stopModelAudioBtn.addEventListener('click', () => this.stopModelAudio());
 
@@ -484,11 +489,29 @@ class FluentEdgeApp {
         this.dom.startSpeakingBtn.style.display = 'none';
         if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'none';
         this.dom.stopSpeakingBtn.style.display = 'inline-flex';
+        if (this.dom.evaluateReadingBtn) {
+          this.dom.evaluateReadingBtn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+            </svg>
+            <span id="evaluateReadingBtnText">Finish &amp; Evaluate Reading</span>
+          `;
+        }
       } else if (status === 'idle') {
         if (!this._isEvaluatingSpeech) {
           this.dom.startSpeakingBtn.style.display = 'inline-flex';
           if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
           this.dom.stopSpeakingBtn.style.display = 'none';
+          if (this.dom.evaluateReadingBtn) {
+            this.dom.evaluateReadingBtn.disabled = false;
+            this.dom.evaluateReadingBtn.innerHTML = `
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+                <polyline points="22 4 12 14.01 9 11.01"></polyline>
+              </svg>
+              <span id="evaluateReadingBtnText">Evaluate Reading</span>
+            `;
+          }
         }
       } else if (status === 'model_speaking') {
         this.dom.playModelAudioBtn.style.display = 'none';
@@ -1814,17 +1837,52 @@ class FluentEdgeApp {
     await this.speechEngine.startListening(this.dom.visualizerCanvas);
   }
 
+  handleEvaluateReading() {
+    // 1. If currently recording, finish recording and run evaluation
+    if (this.speechEngine.isListening) {
+      this.stopSpeakingSession();
+      return;
+    }
+
+    // 2. If already evaluated and report panel is open, scroll smoothly into view
+    if (this.dom.speakingReportPanel && this.dom.speakingReportPanel.style.display !== 'none' && this.dom.speakingReportPanel.innerHTML.trim().length > 0) {
+      this.dom.speakingReportPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      return;
+    }
+
+    // 3. If there is captured audio or words have been read, run evaluation
+    const hasSpoken = this.speechEngine.currentWordIndex > 0 ||
+                      (this.speechEngine.recordedAudioChunks && this.speechEngine.recordedAudioChunks.length > 0) ||
+                      this.speechEngine.lastRecordedBlob;
+
+    if (hasSpoken) {
+      this.stopSpeakingSession();
+    } else {
+      this.showToast("Please read the text aloud first to capture your speaking practice.", "info");
+      if (this.dom.startSpeakingBtn) {
+        this.dom.startSpeakingBtn.focus();
+      }
+    }
+  }
+
   async stopSpeakingSession() {
     if (this._isEvaluatingSpeech) return;
     this._isEvaluatingSpeech = true;
 
-    // Show sleek analysis state on stop speaking button
+    // Show sleek analysis state on stop speaking button & evaluate reading button
     if (this.dom.stopSpeakingBtn) {
       this.dom.stopSpeakingBtn.style.display = 'inline-flex';
       this.dom.stopSpeakingBtn.disabled = true;
       this.dom.stopSpeakingBtn.innerHTML = `
         <svg class="spin" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>
         <span>Whisper AI Evaluating...</span>
+      `;
+    }
+    if (this.dom.evaluateReadingBtn) {
+      this.dom.evaluateReadingBtn.disabled = true;
+      this.dom.evaluateReadingBtn.innerHTML = `
+        <svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>
+        <span>Evaluating Reading (Whisper AI)...</span>
       `;
     }
     if (this.dom.startSpeakingBtn) this.dom.startSpeakingBtn.style.display = 'none';
@@ -1853,6 +1911,16 @@ class FluentEdgeApp {
           Finish &amp; Evaluate Speech
         `;
       }
+      if (this.dom.evaluateReadingBtn) {
+        this.dom.evaluateReadingBtn.disabled = false;
+        this.dom.evaluateReadingBtn.innerHTML = `
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+          </svg>
+          <span id="evaluateReadingBtnText">Evaluate Reading</span>
+        `;
+      }
       if (this.dom.startSpeakingBtn) this.dom.startSpeakingBtn.style.display = 'inline-flex';
       if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
     }
@@ -1860,6 +1928,9 @@ class FluentEdgeApp {
 
   renderSpeakingReport(report) {
     this.dom.speakingReportPanel.style.display = 'block';
+    setTimeout(() => {
+      this.dom.speakingReportPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 80);
     const isWhisper = !!report.isWhisperGroundTruth;
 
     this.dom.speakingReportPanel.innerHTML = `
