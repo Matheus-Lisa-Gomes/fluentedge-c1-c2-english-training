@@ -27,6 +27,8 @@ export class SpeechEngine {
     this.currentWordIndex = 0;
     this.confirmedWordIndex = 0;
     this.beaconIndex = 0;
+    this.confirmedBeaconIndex = 0; // Only advances on isFinal=true chunks; used for WPM
+    this._smoothedWpm = 0;         // EMA-smoothed WPM (α=0.3)
 
     // Kokoro Neural TTS & Multi-Voice Engine State
     this.currentVoiceId = 'af_heart'; // Default: US English Female (Heart: Feminine & Mellow)
@@ -127,8 +129,12 @@ export class SpeechEngine {
     this.recognition.maxAlternatives = 1;
     this.recognition.lang = this.currentAccent === 'uk' ? 'en-GB' : 'en-US';
 
+    // Fix 1: Restart attempt counter — reset on successful onstart
+    this._restartAttempts = 0;
+
     this.recognition.onstart = () => {
       this.isListening = true;
+      this._restartAttempts = 0; // Successful restart — reset failure counter
       this.startTime = Date.now();
       this.startDurationTracker();
       if (this.onStateChange) this.onStateChange({ status: 'recording' });
@@ -158,29 +164,64 @@ export class SpeechEngine {
     this.recognition.onerror = (event) => {
       console.error("Speech recognition error:", event.error);
       if (event.error === 'no-speech') {
-        // Natural pause in speech while reading; do not terminate session
+        // Natural pause in speech while reading — cloud ASR silence timeout; do NOT terminate
         return;
       }
       if (event.error === 'not-allowed') {
         if (this.onError) this.onError("Microphone permission denied. Please allow microphone access in your browser settings.");
+        this.stopListening();
       } else if (event.error === 'network') {
         if (this.onError) this.onError("Speech recognition network error. Note: Brave and Firefox block cloud speech recognition; please use Google Chrome or Microsoft Edge.");
+        this.stopListening();
       } else if (event.error === 'audio-capture') {
         if (this.onError) this.onError("Microphone capture failed. Ensure your microphone is connected and not locked by another application.");
+        this.stopListening();
       }
-      this.stopListening();
+      // For transient errors (aborted, service-not-allowed, etc.) let onend handle the restart
     };
 
     this.recognition.onend = () => {
-      // If recognition paused automatically (e.g., brief silence) while session is active, restart it
+      // Fix 1: Robust guarded restart — prevent InvalidStateError race condition.
+      // The browser needs ~80ms to fully de-initialize before a new start() call is safe.
       if (this.isListening) {
-        try {
-          this.recognition.start();
+        this._restartAttempts = (this._restartAttempts || 0) + 1;
+
+        if (this._restartAttempts <= 5) {
+          // Guarded restart: wait 80ms so the recognition object fully closes first
+          const restartDelay = Math.min(80 + (this._restartAttempts - 1) * 60, 400);
+          setTimeout(() => {
+            if (!this.isListening) return; // Session was manually stopped in the meantime
+            try {
+              this.recognition.start();
+            } catch (e) {
+              if (e.name === 'InvalidStateError') {
+                // Still not fully closed — back-off and try once more
+                setTimeout(() => {
+                  if (!this.isListening) return;
+                  try { this.recognition.start(); } catch (_) {
+                    // Give up this attempt; onend will fire again and increment the counter
+                  }
+                }, 200);
+              }
+            }
+          }, restartDelay);
+          return; // Do NOT teardown — the session is still live
+        } else {
+          // 5 consecutive failures: reinitialise the recognition object entirely
+          console.warn('[SpeechEngine] 5 restart failures — reinitializing recognition.');
+          this._restartAttempts = 0;
+          try {
+            this.initRecognition();
+            setTimeout(() => {
+              if (!this.isListening) return;
+              try { this.recognition.start(); } catch (_) {}
+            }, 150);
+          } catch (_) {}
           return;
-        } catch (e) {
-          // If restart fails, proceed to clean teardown
         }
       }
+
+      // User-initiated stop — clean teardown
       this.isListening = false;
       this.stopDurationTracker();
       this.stopAudioVisualizer();
@@ -975,6 +1016,8 @@ export class SpeechEngine {
     this.currentWordIndex = 0;
     this.confirmedWordIndex = 0;
     this.beaconIndex = 0;
+    this.confirmedBeaconIndex = 0;
+    this._smoothedWpm = 0;
     this.spokenTranscripts = [];
     this.elapsedSeconds = 0;
 
@@ -1081,10 +1124,12 @@ export class SpeechEngine {
         targetIdx++;
       } else {
         // Beacon Milestone Jump with Precision Guard:
-        // Stopwords (the, a, in, is...) can only leap 1 word ahead.
-        // Distinctive content words (length >= 4) can leap up to 6 words (one clause).
+        // Fix 4: Cap interim lookahead to 2 words (not 6) — noisy interim transcripts
+        // can cause false 6-word jumps that lock the beacon before final confirmation.
+        // On final chunks, keep the full 6-word clause horizon.
         let foundAhead = false;
-        const allowedHorizon = isStopWord(spokenWord) ? 1 : 6;
+        const baseHorizon = isFinal ? 6 : 2;
+        const allowedHorizon = isStopWord(spokenWord) ? 1 : baseHorizon;
         const maxLookahead = Math.min(allowedHorizon, this.targetTokens.length - targetIdx - 1);
 
         for (let lookahead = 1; lookahead <= maxLookahead; lookahead++) {
@@ -1126,8 +1171,13 @@ export class SpeechEngine {
     if (isFinal) {
       this.confirmedWordIndex = this.currentWordIndex;
     }
-    // Beacon tracks the furthest forward milestone reached in the discourse
+
+    // Fix 5: beaconIndex advances on both interim and final (for teleprompter highlight)
+    // confirmedBeaconIndex only advances on final chunks (used for WPM)
     this.beaconIndex = Math.max(this.beaconIndex || 0, this.currentWordIndex);
+    if (isFinal) {
+      this.confirmedBeaconIndex = Math.max(this.confirmedBeaconIndex || 0, this.currentWordIndex);
+    }
 
     // Calculate real-time metrics
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
@@ -1135,10 +1185,16 @@ export class SpeechEngine {
     const totalAttempted = Math.max(1, this.currentWordIndex);
     const accuracy = Math.round(((matchedCount + deviationCount * 0.7) / totalAttempted) * 100);
 
-    // Speed (WPM) is measured by the beacon's forward progress through the discourse
-    const minutes = Math.max(0.05, this.elapsedSeconds / 60);
-    const discourseWords = Math.max(this.beaconIndex || 0, matchedCount + deviationCount);
-    const wpm = Math.round(discourseWords / minutes);
+    // Fix 2 + Fix 3: WPM uses confirmedBeaconIndex only, plus EMA smoothing and warm-up guard
+    const minutes = Math.max(0.1, this.elapsedSeconds / 60);
+    const discourseWords = Math.max(this.confirmedBeaconIndex || 0, matchedCount + deviationCount);
+    const rawWpm = Math.round(discourseWords / minutes);
+    // EMA smoothing (α=0.3): new value pulls 30% toward raw reading, 70% from history
+    this._smoothedWpm = this._smoothedWpm
+      ? Math.round(0.7 * this._smoothedWpm + 0.3 * rawWpm)
+      : rawWpm;
+    // Warm-up guard: suppress WPM display for first 8s to avoid divide-by-tiny-number spikes
+    const wpm = this.elapsedSeconds >= 8 ? this._smoothedWpm : 0;
 
     if (this.onWordUpdate) {
       this.onWordUpdate({
@@ -1209,11 +1265,17 @@ export class SpeechEngine {
     this.durationInterval = setInterval(() => {
       this.elapsedSeconds++;
       if (this.onMetricsUpdate) {
-        const minutes = Math.max(0.05, this.elapsedSeconds / 60);
+        // Fix 2 + Fix 3: clock-tick WPM also uses confirmedBeaconIndex + EMA + warm-up guard
+        const minutes = Math.max(0.1, this.elapsedSeconds / 60);
         const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
         const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
-        const discourseWords = Math.max(this.beaconIndex || 0, matchedCount + deviationCount);
-        const wpm = Math.round(discourseWords / minutes);
+        const discourseWords = Math.max(this.confirmedBeaconIndex || 0, matchedCount + deviationCount);
+        const rawWpm = Math.round(discourseWords / minutes);
+        // Refresh EMA on every clock tick even between ASR results
+        this._smoothedWpm = this._smoothedWpm
+          ? Math.round(0.7 * this._smoothedWpm + 0.3 * rawWpm)
+          : rawWpm;
+        const wpm = this.elapsedSeconds >= 8 ? this._smoothedWpm : 0;
         this.onMetricsUpdate({ elapsedSeconds: this.elapsedSeconds, wpm });
       }
     }, 1000);
@@ -1234,11 +1296,13 @@ export class SpeechEngine {
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
     const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
     const omittedCount = this.targetTokens.filter(t => t.status === 'omitted').length;
-    const readRatio = totalWords > 0 ? (Math.max((matchedCount + deviationCount), (this.beaconIndex || 0)) / totalWords) : 0;
+    // Fix 2: Final report also uses confirmedBeaconIndex (not inflated interim beacon)
+    const readRatio = totalWords > 0 ? (Math.max((matchedCount + deviationCount), (this.confirmedBeaconIndex || 0)) / totalWords) : 0;
 
     const minutes = Math.max(0.1, this.elapsedSeconds / 60);
-    const discourseWords = Math.max(this.beaconIndex || 0, matchedCount + deviationCount);
-    const wpm = Math.round(discourseWords / minutes);
+    const discourseWords = Math.max(this.confirmedBeaconIndex || 0, matchedCount + deviationCount);
+    // Use the final smoothed WPM if available, otherwise compute fresh from confirmed data
+    const wpm = this._smoothedWpm > 0 ? this._smoothedWpm : Math.round(discourseWords / minutes);
 
     // Accuracy %
     const pronunciationAccuracy = totalWords > 0 
