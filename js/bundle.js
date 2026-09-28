@@ -15094,6 +15094,12 @@ Output ONLY the raw essay text. Do not include a title, heading, introduction, w
  * and a dedicated Kokoro ONNX Web Worker (off-main-thread neural TTS)
  * with a static pre-rendered audio asset fast-path for 0ms vocab playback.
  */
+
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+  'is', 'it', 'as', 'be', 'are', 'was', 'were', 'that', 'this', 'from', 'but', 'not', 'its'
+]);
+const isStopWord = (w) => STOP_WORDS.has(w) || (w && w.length <= 2);
 class SpeechEngine {
   constructor() {
     this.recognition = null;
@@ -15733,29 +15739,33 @@ class SpeechEngine {
         if (sim === 1.0) break;
       }
 
-      if (bestSim >= 0.82) {
+      if (bestSim >= 0.80) {
         target.status = 'matched';
         matchedCount++;
         spokenIdx = bestIdx + 1;
-      } else if (bestSim >= 0.58) {
+      } else if (bestSim >= 0.65 && target.clean.length >= 4 && !isStopWord(target.clean)) {
         target.status = 'deviation';
         deviationCount++;
         spokenIdx = bestIdx + 1;
       } else {
-        target.status = 'omitted';
-        omittedCount++;
+        // Missed or uncaptured word: LEAVE OPEN ('pending'), do not penalize as omitted or mispronounced!
+        target.status = 'pending';
       }
     }
 
     const totalWords = evaluatedTokens.length;
-    const discourseWords = Math.max(spokenTokens.length, matchedCount + deviationCount);
+    const capturedWords = matchedCount + deviationCount;
+    const discourseWords = Math.max(spokenTokens.length, capturedWords);
     const wpm = Math.round(discourseWords / activeMinutes);
-    const pronunciationAccuracy = totalWords > 0
-      ? Math.min(100, Math.round(((matchedCount + (deviationCount * 0.65)) / totalWords) * 100))
-      : 0;
+
+    // Pronunciation accuracy evaluates the phonological precision of captured/vocalized words
+    // Missed/uncaptured words remain open and are not penalized
+    const pronunciationAccuracy = capturedWords > 0
+      ? Math.min(100, Math.round(((matchedCount + (deviationCount * 0.70)) / capturedWords) * 100))
+      : 100;
 
     const readRatio = totalWords > 0
-      ? Math.min(100, Math.round((Math.max(matchedCount + deviationCount, spokenTokens.length) / totalWords) * 100))
+      ? Math.min(100, Math.round((Math.max(capturedWords, spokenTokens.length) / totalWords) * 100))
       : 0;
 
     // CEFR Speaking Scales (0-5)
@@ -15763,7 +15773,7 @@ class SpeechEngine {
     const pronunciationFeedback = [];
     if (pronunciationAccuracy >= 88) {
       pronunciationScore = 5.0;
-      pronunciationFeedback.push("Exceptional phonological precision and phonemic clarity across polysyllabic vocabulary.");
+      pronunciationFeedback.push("Exceptional phonological precision and phonemic clarity across vocalized vocabulary.");
     } else if (pronunciationAccuracy >= 76) {
       pronunciationScore = 4.2;
       pronunciationFeedback.push("Clear intelligibility with natural intonation. Minor phoneme deviations did not impede comprehension.");
@@ -15772,7 +15782,7 @@ class SpeechEngine {
       pronunciationFeedback.push("Noticeable accent interference or slurred word endings on complex C1 terms. Practice deliberate articulation.");
     } else {
       pronunciationScore = 2.0;
-      pronunciationFeedback.push("Frequent mispronunciations or omitted clauses requiring deliberate articulation practice.");
+      pronunciationFeedback.push("Noticeable phonological deviations requiring deliberate articulation practice.");
     }
 
     let fluencyScore = 5.0;
@@ -15825,11 +15835,10 @@ class SpeechEngine {
     }
 
     const deviatedTokens = evaluatedTokens.filter(t => t.status === 'deviation');
-    const omittedTokens = evaluatedTokens.filter(t => t.status === 'omitted');
     const matchedTokens = evaluatedTokens.filter(t => t.status === 'matched');
 
     const deviatedWords = Array.from(new Set(deviatedTokens.map(t => t.text.trim()))).slice(0, 16);
-    const omittedWords = Array.from(new Set(omittedTokens.map(t => t.text.trim()))).slice(0, 10);
+    const omittedWords = []; // Missed words are left open (pending) and not penalized as omitted
     const matchedPolysyllabic = Array.from(new Set(matchedTokens.filter(t => t.clean.length >= 7).map(t => t.text.trim()))).slice(0, 10);
 
     return {
@@ -16199,13 +16208,6 @@ class SpeechEngine {
 
     let targetIdx = this.confirmedWordIndex;
 
-    // Common stopwords that must NEVER trigger forward leaps
-    const STOP_WORDS = new Set([
-      'the', 'a', 'an', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
-      'is', 'it', 'as', 'be', 'are', 'was', 'were', 'that', 'this', 'from', 'but', 'not', 'its'
-    ]);
-    const isStopWord = (w) => STOP_WORDS.has(w) || w.length <= 2;
-
     for (let sIdx = 0; sIdx < spokenWords.length; sIdx++) {
       if (targetIdx >= this.targetTokens.length) break;
 
@@ -16214,7 +16216,7 @@ class SpeechEngine {
       const targetWord = this.targetTokens[targetIdx];
       const similarity = calculateWordSimilarity(spokenWord, targetWord.clean);
 
-      const isDirectMatch = similarity >= 0.82;
+      const isDirectMatch = similarity >= 0.80;
       const isPrefixMatch = (spokenWord.length >= 3 && targetWord.clean.startsWith(spokenWord)) ||
                             (targetWord.clean.length >= 4 && spokenWord.startsWith(targetWord.clean.slice(0, 3)));
 
@@ -16222,38 +16224,27 @@ class SpeechEngine {
       if (isDirectMatch || isPrefixMatch) {
         targetWord.status = 'matched';
         targetIdx++;
-      } else if (similarity >= 0.55 && !isStopWord(spokenWord)) {
-        // Minor phoneme / accent inflection deviation on content words
-        targetWord.status = 'deviation';
-        targetIdx++;
       } else {
-        // Beacon Milestone Jump with Precision Guard:
-        // Fix 4: Cap interim lookahead to 2 words (not 6) — noisy interim transcripts
-        // can cause false 6-word jumps that lock the beacon before final confirmation.
-        // On final chunks, keep the full 6-word clause horizon.
+        // Beacon Milestone Lookahead:
+        // When the user speaks an upcoming word, look ahead to match it.
+        // CRITICAL: Any skipped or uncaptured words in between REMAIN 'pending' (OPEN).
+        // They are NEVER marked as 'omitted' or graded mid-speaking.
         let foundAhead = false;
-        const baseHorizon = isFinal ? 6 : 2;
+        const baseHorizon = isFinal ? 6 : 3;
         const allowedHorizon = isStopWord(spokenWord) ? 1 : baseHorizon;
         const maxLookahead = Math.min(allowedHorizon, this.targetTokens.length - targetIdx - 1);
 
         for (let lookahead = 1; lookahead <= maxLookahead; lookahead++) {
           const aheadWord = this.targetTokens[targetIdx + lookahead];
           const aheadSim = calculateWordSimilarity(spokenWord, aheadWord.clean);
-          const isAheadPrefix = (spokenWord.length >= 4 && aheadWord.clean.startsWith(spokenWord));
+          const isAheadPrefix = (spokenWord.length >= 3 && aheadWord.clean.startsWith(spokenWord));
 
           // Distinctive match threshold
-          const threshold = lookahead === 1 ? 0.80 : 0.84;
+          const threshold = lookahead === 1 ? 0.78 : 0.82;
 
           if (aheadSim >= threshold || isAheadPrefix) {
-            // Valid milestone match found up front!
-            if (isFinal) {
-              for (let k = 0; k < lookahead; k++) {
-                if (this.targetTokens[targetIdx + k].status === 'pending') {
-                  this.targetTokens[targetIdx + k].status = 'omitted';
-                }
-              }
-            }
-            aheadWord.status = (aheadSim >= 0.82 || isAheadPrefix) ? 'matched' : 'deviation';
+            // Milestone match found!
+            aheadWord.status = 'matched';
             targetIdx = targetIdx + lookahead + 1;
             foundAhead = true;
             break;
@@ -16263,7 +16254,7 @@ class SpeechEngine {
         // If not found ahead, check if this is an accidental repetition/stumble of the immediately previous token
         if (!foundAhead && targetIdx > 0) {
           const prevToken = this.targetTokens[targetIdx - 1];
-          if (calculateWordSimilarity(spokenWord, prevToken.clean) >= 0.82) {
+          if (calculateWordSimilarity(spokenWord, prevToken.clean) >= 0.80) {
             // User repeated previous word (natural fast-speech stumble) - ignore without advancing or penalizing
             continue;
           }
@@ -16286,8 +16277,11 @@ class SpeechEngine {
     // Calculate real-time metrics
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
     const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
-    const totalAttempted = Math.max(1, this.currentWordIndex);
-    const accuracy = Math.round(((matchedCount + deviationCount * 0.7) / totalAttempted) * 100);
+    const capturedCount = matchedCount + deviationCount;
+    // Real-time accuracy evaluates vocalized words only, without penalizing uncaptured/open words
+    const accuracy = capturedCount > 0
+      ? Math.min(100, Math.round(((matchedCount + (deviationCount * 0.7)) / capturedCount) * 100))
+      : 100;
 
     // Fix 2 + Fix 3: WPM uses confirmedBeaconIndex only, plus EMA smoothing and warm-up guard
     const minutes = Math.max(0.1, this.elapsedSeconds / 60);
@@ -16434,19 +16428,21 @@ class SpeechEngine {
     const totalWords = this.targetTokens.length;
     const matchedCount = this.targetTokens.filter(t => t.status === 'matched').length;
     const deviationCount = this.targetTokens.filter(t => t.status === 'deviation').length;
-    const omittedCount = this.targetTokens.filter(t => t.status === 'omitted').length;
+    const capturedWords = matchedCount + deviationCount;
+    const omittedCount = 0; // Missed words are left open (pending) and not penalized as omitted
+
     // Fix 2: Final report also uses confirmedBeaconIndex (not inflated interim beacon)
-    const readRatio = totalWords > 0 ? (Math.max((matchedCount + deviationCount), (this.confirmedBeaconIndex || 0)) / totalWords) : 0;
+    const readRatio = totalWords > 0 ? (Math.max(capturedWords, (this.confirmedBeaconIndex || 0)) / totalWords) : 0;
 
     const minutes = Math.max(0.1, this.elapsedSeconds / 60);
-    const discourseWords = Math.max(this.confirmedBeaconIndex || 0, matchedCount + deviationCount);
+    const discourseWords = Math.max(this.confirmedBeaconIndex || 0, capturedWords);
     // Use the final smoothed WPM if available, otherwise compute fresh from confirmed data
     const wpm = this._smoothedWpm > 0 ? this._smoothedWpm : Math.round(discourseWords / minutes);
 
-    // Accuracy %
-    const pronunciationAccuracy = totalWords > 0 
-      ? Math.min(100, Math.round(((matchedCount + (deviationCount * 0.65)) / totalWords) * 100))
-      : 0;
+    // Accuracy % evaluated solely on vocalized/captured words (not grading missed words)
+    const pronunciationAccuracy = capturedWords > 0 
+      ? Math.min(100, Math.round(((matchedCount + (deviationCount * 0.70)) / capturedWords) * 100))
+      : 100;
 
     // CEFR Speaking Scales (0-5)
     // 1. Pronunciation (Individual sounds, stress, intelligibility)
@@ -16454,7 +16450,7 @@ class SpeechEngine {
     const pronunciationFeedback = [];
     if (pronunciationAccuracy >= 90) {
       pronunciationScore = 5.0;
-      pronunciationFeedback.push("Exceptional phonological precision and phonemic clarity across polysyllabic vocabulary.");
+      pronunciationFeedback.push("Exceptional phonological precision and phonemic clarity across vocalized vocabulary.");
     } else if (pronunciationAccuracy >= 78) {
       pronunciationScore = 4.2;
       pronunciationFeedback.push("Clear intelligibility with natural intonation. Minor phoneme deviations did not impede comprehension.");
@@ -16463,7 +16459,7 @@ class SpeechEngine {
       pronunciationFeedback.push("Noticeable accent interference or slurred word endings on complex C1 terms. Requires stress pattern practice.");
     } else {
       pronunciationScore = 2.0;
-      pronunciationFeedback.push("Frequent mispronunciations or omitted clauses requiring deliberate articulation practice.");
+      pronunciationFeedback.push("Noticeable phonological deviations on complex terms requiring deliberate articulation practice.");
     }
 
     // 2. Fluency & Discourse Speed (C1/C2 Target: 130 - 160 WPM)
@@ -16518,11 +16514,10 @@ class SpeechEngine {
     }
 
     const deviatedTokens = this.targetTokens.filter(t => t.status === 'deviation');
-    const omittedTokens = this.targetTokens.filter(t => t.status === 'omitted');
     const matchedTokens = this.targetTokens.filter(t => t.status === 'matched');
 
     const deviatedWords = Array.from(new Set(deviatedTokens.map(t => t.text.trim()))).slice(0, 16);
-    const omittedWords = Array.from(new Set(omittedTokens.map(t => t.text.trim()))).slice(0, 10);
+    const omittedWords = []; // Missed words are left open (pending) and not penalized as omitted
     const matchedPolysyllabic = Array.from(new Set(matchedTokens.filter(t => t.clean.length >= 7).map(t => t.text.trim()))).slice(0, 10);
 
     return {
