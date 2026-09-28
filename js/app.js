@@ -164,8 +164,6 @@ class FluentEdgeApp {
       retrySpeakingBtn: document.getElementById('retrySpeakingBtn'),
       startSpeakingBtn: document.getElementById('startSpeakingBtn'),
       stopSpeakingBtn: document.getElementById('stopSpeakingBtn'),
-      evaluateReadingBtn: document.getElementById('evaluateReadingBtn'),
-      evaluateReadingBtnText: document.getElementById('evaluateReadingBtnText'),
       playModelAudioBtn: document.getElementById('playModelAudioBtn'),
       playModelAudioBtnText: document.getElementById('playModelAudioBtnText'),
       stopModelAudioBtn: document.getElementById('stopModelAudioBtn'),
@@ -313,9 +311,6 @@ class FluentEdgeApp {
     }
     this.dom.startSpeakingBtn.addEventListener('click', () => this.startSpeakingSession());
     this.dom.stopSpeakingBtn.addEventListener('click', () => this.stopSpeakingSession());
-    if (this.dom.evaluateReadingBtn) {
-      this.dom.evaluateReadingBtn.addEventListener('click', () => this.handleEvaluateReading());
-    }
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
     this.dom.stopModelAudioBtn.addEventListener('click', () => this.stopModelAudio());
 
@@ -489,29 +484,11 @@ class FluentEdgeApp {
         this.dom.startSpeakingBtn.style.display = 'none';
         if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'none';
         this.dom.stopSpeakingBtn.style.display = 'inline-flex';
-        if (this.dom.evaluateReadingBtn) {
-          this.dom.evaluateReadingBtn.innerHTML = `
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-              <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-            </svg>
-            <span id="evaluateReadingBtnText">Finish &amp; Evaluate Reading</span>
-          `;
-        }
       } else if (status === 'idle') {
         if (!this._isEvaluatingSpeech) {
           this.dom.startSpeakingBtn.style.display = 'inline-flex';
           if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
           this.dom.stopSpeakingBtn.style.display = 'none';
-          if (this.dom.evaluateReadingBtn) {
-            this.dom.evaluateReadingBtn.disabled = false;
-            this.dom.evaluateReadingBtn.innerHTML = `
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-                <polyline points="22 4 12 14.01 9 11.01"></polyline>
-              </svg>
-              <span id="evaluateReadingBtnText">Evaluate Reading</span>
-            `;
-          }
         }
       } else if (status === 'model_speaking') {
         this.dom.playModelAudioBtn.style.display = 'none';
@@ -1837,52 +1814,17 @@ class FluentEdgeApp {
     await this.speechEngine.startListening(this.dom.visualizerCanvas);
   }
 
-  handleEvaluateReading() {
-    // 1. If currently recording, finish recording and run evaluation
-    if (this.speechEngine.isListening) {
-      this.stopSpeakingSession();
-      return;
-    }
-
-    // 2. If already evaluated and report panel is open, scroll smoothly into view
-    if (this.dom.speakingReportPanel && this.dom.speakingReportPanel.style.display !== 'none' && this.dom.speakingReportPanel.innerHTML.trim().length > 0) {
-      this.dom.speakingReportPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      return;
-    }
-
-    // 3. If there is captured audio or words have been read, run evaluation
-    const hasSpoken = this.speechEngine.currentWordIndex > 0 ||
-                      (this.speechEngine.recordedAudioChunks && this.speechEngine.recordedAudioChunks.length > 0) ||
-                      this.speechEngine.lastRecordedBlob;
-
-    if (hasSpoken) {
-      this.stopSpeakingSession();
-    } else {
-      this.showToast("Please read the text aloud first to capture your speaking practice.", "info");
-      if (this.dom.startSpeakingBtn) {
-        this.dom.startSpeakingBtn.focus();
-      }
-    }
-  }
-
   async stopSpeakingSession() {
     if (this._isEvaluatingSpeech) return;
     this._isEvaluatingSpeech = true;
 
-    // Show sleek analysis state on stop speaking button & evaluate reading button
+    // Show sleek analysis state on stop speaking button
     if (this.dom.stopSpeakingBtn) {
       this.dom.stopSpeakingBtn.style.display = 'inline-flex';
       this.dom.stopSpeakingBtn.disabled = true;
       this.dom.stopSpeakingBtn.innerHTML = `
         <svg class="spin" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>
         <span>Whisper AI Evaluating...</span>
-      `;
-    }
-    if (this.dom.evaluateReadingBtn) {
-      this.dom.evaluateReadingBtn.disabled = true;
-      this.dom.evaluateReadingBtn.innerHTML = `
-        <svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle><path d="M12 2a10 10 0 0 1 10 10"></path></svg>
-        <span>Evaluating Reading (Whisper AI)...</span>
       `;
     }
     if (this.dom.startSpeakingBtn) this.dom.startSpeakingBtn.style.display = 'none';
@@ -1911,16 +1853,6 @@ class FluentEdgeApp {
           Finish &amp; Evaluate Speech
         `;
       }
-      if (this.dom.evaluateReadingBtn) {
-        this.dom.evaluateReadingBtn.disabled = false;
-        this.dom.evaluateReadingBtn.innerHTML = `
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
-            <polyline points="22 4 12 14.01 9 11.01"></polyline>
-          </svg>
-          <span id="evaluateReadingBtnText">Evaluate Reading</span>
-        `;
-      }
       if (this.dom.startSpeakingBtn) this.dom.startSpeakingBtn.style.display = 'inline-flex';
       if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
     }
@@ -1933,10 +1865,58 @@ class FluentEdgeApp {
     }, 80);
     const isWhisper = !!report.isWhisperGroundTruth;
 
+    // Detailed Diagnostic Data
+    const deviated = report.deviatedWords || [];
+    const omitted = report.omittedWords || [];
+    const mastered = report.matchedPolysyllabic || [];
+    const wpm = report.wpm || 0;
+    const accuracy = report.pronunciationAccuracy || 0;
+    const coverage = report.readRatio || 0;
+
+    // Cadence Evaluation Diagnosis
+    let cadenceVerdict = 'Within Optimal Range';
+    let cadenceAdvice = '';
+
+    if (wpm < 110) {
+      cadenceVerdict = 'Hesitant / Staccato Cadence';
+      cadenceAdvice = `Your pace of <strong>${wpm} WPM</strong> is below the C1/C2 target of 130–160 WPM. You are likely pausing between individual words rather than speaking in connected thought-groups. Group 4–6 words per breath unit and link word endings into vowels.`;
+    } else if (wpm >= 110 && wpm < 130) {
+      cadenceVerdict = 'Deliberate / Controlled Cadence';
+      cadenceAdvice = `Your pace of <strong>${wpm} WPM</strong> is steady and intelligible, but slightly measured. To reach full native fluency (135–155 WPM), increase your momentum through introductory phrases and unstressed grammatical words.`;
+    } else if (wpm >= 130 && wpm <= 165) {
+      cadenceVerdict = 'Optimal C1/C2 Native Cadence';
+      cadenceAdvice = `Outstanding speech rate at <strong>${wpm} WPM</strong>! Your tempo matches native academic discourse. Maintain natural micro-pauses at punctuation (0.4s at commas, 0.6s at periods) to let complex arguments breathe.`;
+    } else {
+      cadenceVerdict = 'Rushed / Accelerated Tempo';
+      cadenceAdvice = `Your speaking rate of <strong>${wpm} WPM</strong> exceeds the 165 WPM threshold. Speaking too quickly leads to dropped consonant clusters and flattened sentence melody. Consciously slow down to give rhetorical weight to key terms.`;
+    }
+
+    // Pronunciation Diagnosis
+    let pronAdvice = '';
+    if (accuracy >= 88) {
+      pronAdvice = `Superb articulatory precision (<strong>${accuracy}%</strong>). Polysyllabic academic vocabulary was delivered with crisp phoneme clarity and correct lexical stress patterns.`;
+    } else if (accuracy >= 76) {
+      pronAdvice = `Strong intelligibility (<strong>${accuracy}%</strong>). Minor accent inflection or consonant softening detected on multi-syllable terms, but your discourse remains fully intelligible to native examiners.`;
+    } else if (accuracy >= 62) {
+      pronAdvice = `Moderate phonological control (<strong>${accuracy}%</strong>). Noticeable accent interference, dropped consonants, or vowel reduction errors on complex lexis. Targeted articulation practice on the flagged words below is recommended.`;
+    } else {
+      pronAdvice = `Substantial articulatory revision required (<strong>${accuracy}%</strong>). Multiple words were mispronounced or skipped. Listen to each word's audio using the model player before re-recording.`;
+    }
+
+    // Discourse Management Diagnosis
+    let discourseAdvice = '';
+    if (coverage >= 95) {
+      discourseAdvice = `Complete textual delivery (<strong>${coverage}%</strong> coverage). You maintained consistent vocal projection and breath control from the opening clause to the conclusion.`;
+    } else if (coverage >= 80) {
+      discourseAdvice = `Good coverage (<strong>${coverage}%</strong>), though some phrases were skipped or clipped near line transitions. Strive for complete endurance through the entire passage.`;
+    } else {
+      discourseAdvice = `Incomplete presentation (<strong>${coverage}%</strong> coverage). You stopped reading before reaching the final paragraph. Complete all sentences to achieve a valid C1/C2 speaking evaluation.`;
+    }
+
     this.dom.speakingReportPanel.innerHTML = `
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 12px;">
         <div>
-          <h3 style="margin: 0 0 4px 0;">C1–C2 Speaking Practice Assessment</h3>
+          <h3 style="margin: 0 0 4px 0;">C1–C2 Speaking Practice Assessment Report</h3>
           ${isWhisper ? `
             <div class="whisper-ground-truth-tag" title="Decoded on-device using Whisper ONNX with millisecond word timestamps">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -1948,35 +1928,41 @@ class FluentEdgeApp {
             <div style="font-size: 11.5px; color: var(--text-muted);">Real-Time Speech Stream Evaluation</div>
           `}
         </div>
-        <span class="cefr-pill ${report.meetsC1Speaking ? 'badge-c1' : 'badge-b2'}">${report.speakingBand}</span>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span class="cefr-pill ${report.meetsC1Speaking ? 'badge-c1' : 'badge-b2'}">${report.speakingBand}</span>
+          <span class="cefr-pill badge-c1">${report.overallPercentage || accuracy}% Overall</span>
+        </div>
       </div>
 
+      <!-- Core Performance Metrics Overview -->
       <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;">
         <div class="scale-card" style="text-align: center;">
-          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Pronunciation Precision</div>
-          <div style="font-size: 32px; font-weight: 800; color: var(--gold-light); font-family: var(--font-serif);">${report.pronunciationAccuracy}%</div>
-          <div style="font-size: 12px; color: var(--emerald);">${report.matchedCount} words accurately recognized</div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Pronunciation Precision</div>
+          <div style="font-size: 32px; font-weight: 800; color: var(--gold-light); font-family: var(--font-serif);">${accuracy}%</div>
+          <div style="font-size: 12px; color: var(--emerald);">${report.matchedCount} / ${report.totalWords} words recognized</div>
         </div>
 
         <div class="scale-card" style="text-align: center;">
-          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Fluency & Pacing</div>
-          <div style="font-size: 32px; font-weight: 800; color: var(--blue-accent); font-family: var(--font-serif);">${report.wpm} <span style="font-size: 14px;">WPM</span></div>
-          <div style="font-size: 12px; color: var(--text-secondary);">${isWhisper ? `Phonation: ${report.activeSpeechDuration || report.elapsedSeconds}s (pure speech)` : 'Target: 130-160 WPM'}</div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Speech Cadence & Tempo</div>
+          <div style="font-size: 32px; font-weight: 800; color: var(--blue-accent); font-family: var(--font-serif);">${wpm} <span style="font-size: 14px;">WPM</span></div>
+          <div style="font-size: 12px; color: var(--text-secondary);">${isWhisper ? `Phonation: ${report.activeSpeechDuration || report.elapsedSeconds}s (pure speech)` : 'C1/C2 Target: 130–160 WPM'}</div>
         </div>
 
         <div class="scale-card" style="text-align: center;">
-          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Discourse Duration</div>
-          <div style="font-size: 32px; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono);">${this.formatSeconds(report.elapsedSeconds)}</div>
-          <div style="font-size: 12px; color: var(--text-secondary);">${report.readRatio}% text covered</div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Discourse Coverage</div>
+          <div style="font-size: 32px; font-weight: 800; color: var(--text-primary); font-family: var(--font-mono);">${coverage}%</div>
+          <div style="font-size: 12px; color: var(--text-secondary);">${this.formatSeconds(report.elapsedSeconds)} total time</div>
         </div>
       </div>
 
-      <div class="scales-grid">
+      <!-- Qualitative Assessment Scales -->
+      <div class="scales-grid" style="grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;">
         <div class="scale-card">
           <div class="scale-card-header">
-            <span class="scale-name">Phonology & Individual Sounds</span>
+            <span class="scale-name">Phonemic Precision</span>
             <span class="scale-score-pill">${report.scores.pronunciation.score} / 5</span>
           </div>
+          <p style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 8px 0;">${pronAdvice}</p>
           <ul class="scale-feedback-list">
             ${report.scores.pronunciation.feedback.map(f => `<li>${f}</li>`).join('')}
           </ul>
@@ -1984,17 +1970,155 @@ class FluentEdgeApp {
 
         <div class="scale-card">
           <div class="scale-card-header">
-            <span class="scale-name">Speech Cadence & Rhythm</span>
+            <span class="scale-name">Cadence & Rhythm</span>
             <span class="scale-score-pill">${report.scores.fluency.score} / 5</span>
           </div>
+          <p style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 8px 0;">${cadenceAdvice}</p>
           <ul class="scale-feedback-list">
             ${report.scores.fluency.feedback.map(f => `<li>${f}</li>`).join('')}
           </ul>
         </div>
+
+        <div class="scale-card">
+          <div class="scale-card-header">
+            <span class="scale-name">Discourse Stamina</span>
+            <span class="scale-score-pill">${report.scores.discourse.score} / 5</span>
+          </div>
+          <p style="font-size: 12.5px; color: var(--text-secondary); line-height: 1.5; margin: 0 0 8px 0;">${discourseAdvice}</p>
+          <ul class="scale-feedback-list">
+            ${report.scores.discourse.feedback.map(f => `<li>${f}</li>`).join('')}
+          </ul>
+        </div>
+      </div>
+
+      <!-- Specific Word-Level Pronunciation Diagnostics -->
+      <div class="speaking-diagnostic-section">
+        ${deviated.length > 0 ? `
+          <div class="diagnostic-title">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+            <span>Words Needing Pronunciation Refinement (${deviated.length} detected)</span>
+          </div>
+          <div class="diagnostic-desc">
+            These words exhibited minor phoneme deviations, slurred endings, or vowel reduction irregularities. Click the speaker icon on any word to hear native model pronunciation:
+          </div>
+          <div class="word-diagnostic-grid">
+            ${deviated.map(w => `
+              <div class="diagnostic-word-pill deviation">
+                <span>${w}</span>
+                <button class="diagnostic-word-btn" data-word="${w.toLowerCase().replace(/[^a-z0-9]/g, '')}" title="Hear '${w}' model pronunciation">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        ` : `
+          <div class="diagnostic-title" style="color: var(--emerald);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            <span>Zero Significant Phonetic Deviations</span>
+          </div>
+          <div class="diagnostic-desc" style="color: var(--emerald);">
+            Phenomenal articulation! All attempted words met high phonetic confidence thresholds without noticeable slurring or mispronunciations.
+          </div>
+        `}
+
+        ${omitted.length > 0 ? `
+          <div class="diagnostic-title" style="margin-top: 18px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg>
+            <span>Skipped or Rushed Clauses (${omitted.length} terms)</span>
+          </div>
+          <div class="diagnostic-desc">
+            These terms were bypassed during speech stream capture. When reading aloud, maintain steady horizontal eye-tracking:
+          </div>
+          <div class="word-diagnostic-grid">
+            ${omitted.map(w => `
+              <div class="diagnostic-word-pill omitted">
+                <span>${w}</span>
+                <button class="diagnostic-word-btn" data-word="${w.toLowerCase().replace(/[^a-z0-9]/g, '')}" title="Hear '${w}' model pronunciation">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+
+        ${mastered.length > 0 ? `
+          <div class="diagnostic-title" style="margin-top: 18px; color: var(--emerald);">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            <span>High-Precision Advanced Lexis (${mastered.length} polysyllabic terms)</span>
+          </div>
+          <div class="word-diagnostic-grid">
+            ${mastered.map(w => `
+              <div class="diagnostic-word-pill mastered">
+                <span>✓ ${w}</span>
+                <button class="diagnostic-word-btn" data-word="${w.toLowerCase().replace(/[^a-z0-9]/g, '')}" title="Hear '${w}' model pronunciation">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+
+      <!-- Actionable Improvement Roadmap: What You Must Do to Improve -->
+      <div class="actionable-roadmap-card">
+        <div class="roadmap-header">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+          <span>What You Must Do to Improve (Pedagogical Action Plan)</span>
+        </div>
+
+        <div class="action-step-item">
+          <div class="action-step-badge">1</div>
+          <div class="action-step-content">
+            <div class="action-step-title">Calibrate Speech Cadence to the 130–160 WPM Target Window</div>
+            <div class="action-step-text">
+              ${wpm < 120 
+                ? `Your current cadence is <span class="action-step-highlight">${wpm} WPM</span>. You need to accelerate by approximately <strong>${135 - wpm} WPM</strong>. Practice <em>Syntactic Chunking</em>: instead of treating words as separate units, bind 4–5 words together in a single melodic breath group (e.g. <em>[It is widely contended that] [statutory oversight must be enacted]</em>).`
+                : wpm > 165
+                ? `Your current cadence is <span class="action-step-highlight">${wpm} WPM</span>. You are rushing through dense academic discourse. Slow down by <strong>${wpm - 150} WPM</strong> to avoid swallowing unstressed syllables. Deliberately take a 0.4s micro-pause at commas and a 0.6s pause at sentence terminals.`
+                : `Your current cadence of <span class="action-step-highlight">${wpm} WPM</span> is in the gold-standard C1/C2 range. Focus on <em>Rhetorical Modulation</em>: decelerate slightly when delivering the primary thesis, and use a crisp, brisk tempo through parenthetical clauses.`
+              }
+            </div>
+          </div>
+        </div>
+
+        <div class="action-step-item">
+          <div class="action-step-badge">2</div>
+          <div class="action-step-content">
+            <div class="action-step-title">Master Connected Speech & Catenation (Consonant-to-Vowel Linking)</div>
+            <div class="action-step-text">
+              English is a stress-timed language characterized by smooth liaison. When a word ends with a consonant and the next begins with a vowel, link them seamlessly (e.g. pronounce <em>"proves it"</em> as <em>"pro-ve-zit"</em>, and <em>"an unprecedented"</em> as <em>"a-nun-precedented"</em>). This prevents the choppy, halting rhythm that drops speaking scores from Band 5 to Band 3.
+            </div>
+          </div>
+        </div>
+
+        <div class="action-step-item">
+          <div class="action-step-badge">3</div>
+          <div class="action-step-content">
+            <div class="action-step-title">Enforce Tonic Syllable Stress & Vowel Reduction on C1/C2 Lexis</div>
+            <div class="action-step-text">
+              ${deviated.length > 0
+                ? `Review the <strong>${deviated.length} flagged word(s)</strong> above. Click each speaker icon to listen to the model voice. Notice which syllable carries the primary stress (e.g., <em>al-go-RITH-mic</em>, not <em>AL-go-rith-mic</em>). Elongate the vowel in the stressed syllable and reduce unstressed vowels to a neutral schwa (/ə/).`
+                : `Ensure you maintain strong vocal projection through word-final consonant clusters (/-ts/, /-kts/, /-nds/ in words like <em>aspects, protects, grounds</em>). Do not let your vocal volume trail off at the end of long compound sentences.`
+              }
+            </div>
+          </div>
+        </div>
+
+        <div class="action-step-item">
+          <div class="action-step-badge">4</div>
+          <div class="action-step-content">
+            <div class="action-step-title">Immediate Acoustic Shadowing & Re-Recording Drill</div>
+            <div class="action-step-text">
+              While your acoustic feedback and word timestamps are fresh in working memory, click <strong>Record Another Attempt</strong> below. Read through the text once more, focusing specifically on smooth chunk transitions and clear final consonants.
+            </div>
+          </div>
+        </div>
       </div>
 
       ${isWhisper && report.whisperTranscribedText ? `
-        <div class="whisper-transcript-box">
+        <div class="whisper-transcript-box" style="margin-top: 20px;">
           <div class="whisper-transcript-header">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
@@ -2004,7 +2128,30 @@ class FluentEdgeApp {
           <p class="whisper-transcript-text">"${report.whisperTranscribedText}"</p>
         </div>
       ` : ''}
+
+      <div style="margin-top: 24px; text-align: center;">
+        <button id="reportRetrySpeakingBtn" class="btn btn-secondary" style="padding: 12px 24px; font-size: 14px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"></path></svg>
+          Record Another Attempt (Apply Improvements)
+        </button>
+      </div>
     `;
+
+    // Bind audio playback listeners on all diagnostic word pills
+    this.dom.speakingReportPanel.querySelectorAll('.diagnostic-word-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const word = btn.getAttribute('data-word');
+        if (word) {
+          this.speechEngine.speakVocabWord(word, 0.85);
+        }
+      });
+    });
+
+    // Bind retry button in report
+    document.getElementById('reportRetrySpeakingBtn')?.addEventListener('click', () => {
+      this.retrySpeakingSession();
+    });
   }
 
   playModelAudio() {

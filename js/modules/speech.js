@@ -737,6 +737,14 @@ export class SpeechEngine {
       meetsC1Speaking = false;
     }
 
+    const deviatedTokens = evaluatedTokens.filter(t => t.status === 'deviation');
+    const omittedTokens = evaluatedTokens.filter(t => t.status === 'omitted');
+    const matchedTokens = evaluatedTokens.filter(t => t.status === 'matched');
+
+    const deviatedWords = Array.from(new Set(deviatedTokens.map(t => t.text.trim()))).slice(0, 16);
+    const omittedWords = Array.from(new Set(omittedTokens.map(t => t.text.trim()))).slice(0, 10);
+    const matchedPolysyllabic = Array.from(new Set(matchedTokens.filter(t => t.clean.length >= 7).map(t => t.text.trim()))).slice(0, 10);
+
     return {
       pronunciationAccuracy,
       wpm,
@@ -758,7 +766,10 @@ export class SpeechEngine {
         fluency: { score: Number(fluencyScore.toFixed(1)), max: 5, feedback: fluencyFeedback },
         discourse: { score: Number(discourseScore.toFixed(1)), max: 5, feedback: discourseFeedback }
       },
-      tokens: evaluatedTokens
+      tokens: evaluatedTokens,
+      deviatedWords,
+      omittedWords,
+      matchedPolysyllabic
     };
   }
 
@@ -1419,6 +1430,14 @@ export class SpeechEngine {
       meetsC1Speaking = false;
     }
 
+    const deviatedTokens = this.targetTokens.filter(t => t.status === 'deviation');
+    const omittedTokens = this.targetTokens.filter(t => t.status === 'omitted');
+    const matchedTokens = this.targetTokens.filter(t => t.status === 'matched');
+
+    const deviatedWords = Array.from(new Set(deviatedTokens.map(t => t.text.trim()))).slice(0, 16);
+    const omittedWords = Array.from(new Set(omittedTokens.map(t => t.text.trim()))).slice(0, 10);
+    const matchedPolysyllabic = Array.from(new Set(matchedTokens.filter(t => t.clean.length >= 7).map(t => t.text.trim()))).slice(0, 10);
+
     return {
       pronunciationAccuracy,
       wpm,
@@ -1435,7 +1454,10 @@ export class SpeechEngine {
         pronunciation: { score: Number(pronunciationScore.toFixed(1)), max: 5, feedback: pronunciationFeedback },
         fluency: { score: Number(fluencyScore.toFixed(1)), max: 5, feedback: fluencyFeedback },
         discourse: { score: Number(discourseScore.toFixed(1)), max: 5, feedback: discourseFeedback }
-      }
+      },
+      deviatedWords,
+      omittedWords,
+      matchedPolysyllabic
     };
   }
 
