@@ -227,6 +227,37 @@ export function getRandomVocabularySet(level = 'C1') {
     stems: generateWordStems(item.headword, item.pos)
   }));
 }
+
+export function getRandomSingleVocabularyWord(pos, currentHeadwords = [], level = 'C1') {
+  const isC2 = (level || '').toUpperCase() === 'C2';
+  const pool = (isC2 ? VOCABULARY_BY_LEVEL.C2 : VOCABULARY_BY_LEVEL.C1) || VOCABULARY_LEXICON;
+  const targetPos = (pos || '').toLowerCase().trim();
+
+  let candidates = pool.filter(w => (w.pos || '').toLowerCase() === targetPos);
+  if (candidates.length === 0) {
+    candidates = VOCABULARY_LEXICON.filter(w => (w.pos || '').toLowerCase() === targetPos);
+  }
+
+  const excludeSet = new Set(
+    (currentHeadwords || []).map(item => {
+      if (!item) return '';
+      if (typeof item === 'string') return item.toLowerCase().trim();
+      return (item.headword || item.word || '').toLowerCase().trim();
+    }).filter(Boolean)
+  );
+
+  const available = candidates.filter(w => !excludeSet.has((w.headword || '').toLowerCase().trim()));
+  const chosenPool = available.length > 0 ? available : candidates;
+
+  if (chosenPool.length === 0) return null;
+
+  const item = chosenPool[Math.floor(Math.random() * chosenPool.length)];
+  return {
+    ...item,
+    word: item.headword,
+    stems: generateWordStems(item.headword, item.pos)
+  };
+}
 `;
 
 const outContent = `/**

@@ -343,6 +343,46 @@ const techTopicTestPassed = techSubjectsValid &&
                             techPromptEmbedsSubject &&
                             techPromptEmbedsDirective;
 
+console.log("\n=== TEST 14: Single Word Reroll (Strict Part of Speech Preservation) ===");
+import { getRandomSingleVocabularyWord } from './js/data/vocabulary.js';
+
+let singleRerollPassed = true;
+const testLevels = ['C1', 'C2'];
+const testPosList = ['verb', 'noun', 'adjective', 'adverb'];
+
+for (const lvl of testLevels) {
+  const activeSet = getRandomVocabularySet(lvl);
+  const activeWords = activeSet.map(w => w.headword);
+
+  for (const targetPos of testPosList) {
+    for (let iter = 0; iter < 15; iter++) {
+      const replacement = getRandomSingleVocabularyWord(targetPos, activeWords, lvl);
+      if (!replacement) {
+        console.error(`FAILED: No replacement returned for ${targetPos} in ${lvl}`);
+        singleRerollPassed = false;
+        break;
+      }
+      if (replacement.pos.toLowerCase() !== targetPos) {
+        console.error(`FAILED: POS mismatch! Requested ${targetPos}, got ${replacement.pos}`);
+        singleRerollPassed = false;
+        break;
+      }
+      if (activeWords.map(w => w.toLowerCase()).includes(replacement.word.toLowerCase())) {
+        console.error(`FAILED: Duplicate headword returned: ${replacement.word}`);
+        singleRerollPassed = false;
+        break;
+      }
+      if (!Array.isArray(replacement.stems) || replacement.stems.length === 0) {
+        console.error(`FAILED: Stems missing on replacement ${replacement.word}`);
+        singleRerollPassed = false;
+        break;
+      }
+    }
+  }
+}
+
+console.log("Single Word Reroll POS Preservation Tested (120 trials across C1/C2):", singleRerollPassed ? "PASS" : "FAIL");
+
 const allPassed = evalPassC1.meetsThreshold && 
                   !evalFailB1.meetsThreshold && 
                   evalPassC2.meetsThreshold && 
@@ -356,10 +396,11 @@ const allPassed = evalPassC1.meetsThreshold &&
                   difficultyFilterTestPassed &&
                   wordParaGateTestPassed &&
                   startTopicValid &&
-                  techTopicTestPassed;
+                  techTopicTestPassed &&
+                  singleRerollPassed;
 
 if (allPassed) {
-  console.log("\n>>> ALL TESTS PASSED: FluentEdge Assessment Evaluator, 10-Word Lexicon Engine, 100% Compulsory Lexis Guard, AI Prompt Generator, Tree Topic Architecture, Obligatory Topic Adherence Guard, Topic Difficulty Tier Filter, Obligatory Word/Paragraph Gates, Fixed Easy Starting Topic & Professional Tech Topic Engine accurately configured! <<<");
+  console.log("\n>>> ALL TESTS PASSED: FluentEdge Assessment Evaluator, 10-Word Lexicon Engine, 100% Compulsory Lexis Guard, AI Prompt Generator, Tree Topic Architecture, Obligatory Topic Adherence Guard, Topic Difficulty Tier Filter, Obligatory Word/Paragraph Gates, Fixed Easy Starting Topic, Professional Tech Topic Engine & Single Word Reroll accurately configured! <<<");
 } else {
   console.error("\n>>> TEST FAILED! <<<", {
     evalPassC1: evalPassC1.meetsThreshold,

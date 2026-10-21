@@ -12996,6 +12996,52 @@ function getRandomVocabularySet(level = 'C1') {
   }));
 }
 
+/**
+ * Reroll a single vocabulary word while strictly preserving its Part of Speech (POS).
+ * If the user rerolls an adverb, it only draws another adverb;
+ * verbs draw verbs, nouns draw nouns, adjectives draw adjectives.
+ * Excludes all current active headwords to prevent duplicates.
+ *
+ * @param {string} pos - Part of speech ('verb', 'noun', 'adjective', 'adverb')
+ * @param {Array<string|object>} currentHeadwords - Currently active headwords to exclude
+ * @param {string} level - 'C1' or 'C2'
+ * @returns {object|null} New word object with stems and headword
+ */
+function getRandomSingleVocabularyWord(pos, currentHeadwords = [], level = 'C1') {
+  const isC2 = (level || '').toUpperCase() === 'C2';
+  const pool = (isC2 ? VOCABULARY_BY_LEVEL.C2 : VOCABULARY_BY_LEVEL.C1) || VOCABULARY_LEXICON;
+  const targetPos = (pos || '').toLowerCase().trim();
+
+  // Filter candidates strictly matching Part of Speech in current level pool
+  let candidates = pool.filter(w => (w.pos || '').toLowerCase() === targetPos);
+  if (candidates.length === 0) {
+    // Graceful fallback to whole lexicon if current level pool has none
+    candidates = VOCABULARY_LEXICON.filter(w => (w.pos || '').toLowerCase() === targetPos);
+  }
+
+  // Build exclusion set from currently active words
+  const excludeSet = new Set(
+    (currentHeadwords || []).map(item => {
+      if (!item) return '';
+      if (typeof item === 'string') return item.toLowerCase().trim();
+      return (item.headword || item.word || '').toLowerCase().trim();
+    }).filter(Boolean)
+  );
+
+  // Available candidates excluding active set
+  const available = candidates.filter(w => !excludeSet.has((w.headword || '').toLowerCase().trim()));
+  const chosenPool = available.length > 0 ? available : candidates;
+
+  if (chosenPool.length === 0) return null;
+
+  const item = chosenPool[Math.floor(Math.random() * chosenPool.length)];
+  return {
+    ...item,
+    word: item.headword,
+    stems: generateWordStems(item.headword, item.pos)
+  };
+}
+
 
 
   // ==========================================
@@ -17821,9 +17867,6 @@ class FluentEdgeApp {
       speakingVoiceTip: document.getElementById('speakingVoiceTip'),
       speakingVoiceTipName: document.getElementById('speakingVoiceTipName'),
 
-      // Toast
-      toastContainer: document.getElementById('toastContainer'),
-
       // AI Essay Prompt Generator
       copyAiPromptBtn: document.getElementById('copyAiPromptBtn'),
       copyAiPromptBtnText: document.getElementById('copyAiPromptBtnText'),
@@ -18397,7 +18440,6 @@ class FluentEdgeApp {
     if (stageNum === 3) {
       const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
       if (!text) {
-        this.showToast("Please draft your essay in Stage 2 before entering Speaking practice.", "warning");
         this.setStage(2);
         return;
       }
@@ -18616,8 +18658,15 @@ class FluentEdgeApp {
               </div>
               <div class="vocab-chip-actions">
                 <span class="vocab-used-check">✓</span>
-                <button class="vocab-audio-btn" data-speak="${headword}" title="Listen to RP British pronunciation" aria-label="Listen to pronunciation of ${headword}">
+                <button class="vocab-audio-btn" data-speak="${headword}" title="Listen to pronunciation of ${headword}" aria-label="Listen to pronunciation of ${headword}">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+                </button>
+                <button class="vocab-reroll-btn" data-reroll-word="${headword}" data-pos="${v.pos}" title="Reroll this ${v.pos} for another ${v.pos}" aria-label="Reroll this ${v.pos}">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                  </svg>
                 </button>
               </div>
             </div>
@@ -18646,6 +18695,15 @@ class FluentEdgeApp {
           );
         });
       });
+
+      // Attach individual word reroll listeners (strictly preserving Part of Speech)
+      this.dom.vocabGrid.querySelectorAll('.vocab-reroll-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const word = btn.getAttribute('data-reroll-word');
+          this.rerollSingleWord(word);
+        });
+      });
     }
 
     // Stage 2 Compact Chips Strip
@@ -18663,6 +18721,13 @@ class FluentEdgeApp {
             <span class="stage2-mini-check" style="${usage.used ? '' : 'display: none;'}">✓</span>
             <button class="stage2-mini-audio-btn" data-speak="${headword}" title="Listen to pronunciation of ${headword}" aria-label="Listen to pronunciation of ${headword}">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
+            </button>
+            <button class="stage2-mini-reroll-btn" data-reroll-word="${headword}" data-pos="${v.pos}" title="Reroll this ${v.pos}" aria-label="Reroll this ${v.pos}">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+              </svg>
             </button>
           </div>
         `;
@@ -18682,6 +18747,60 @@ class FluentEdgeApp {
           );
         });
       });
+
+      this.dom.stage2VocabChips.querySelectorAll('.stage2-mini-reroll-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const word = btn.getAttribute('data-reroll-word');
+          this.rerollSingleWord(word);
+        });
+      });
+    }
+  }
+
+  /**
+   * Reroll an individual compulsory target word while strictly preserving its Part of Speech (POS).
+   * Verbs reroll to verbs, nouns to nouns, adjectives to adjectives, adverbs to adverbs.
+   * Excludes already active target words to ensure zero duplicates.
+   */
+  rerollSingleWord(targetHeadword) {
+    if (!this.activeVocabulary || this.activeVocabulary.length === 0) return;
+
+    const normTarget = (targetHeadword || '').toLowerCase().trim();
+    const index = this.activeVocabulary.findIndex(v => {
+      const hw = (v.headword || v.word || '').toLowerCase().trim();
+      return hw === normTarget;
+    });
+
+    if (index === -1) return;
+
+    const currentItem = this.activeVocabulary[index];
+    const pos = (currentItem.pos || 'noun').toLowerCase();
+    const currentHeadwords = this.activeVocabulary.map(v => v.headword || v.word);
+
+    const replacement = getRandomSingleVocabularyWord(pos, currentHeadwords, this.targetLevel);
+    if (!replacement) return;
+
+    // Check if user has already written the old word in their current draft
+    const essayText = this.dom.essayInput ? (this.dom.essayInput.value || "") : "";
+    const oldUsage = checkTargetWordUsage(currentItem, essayText);
+
+    // Swap the item in activeVocabulary
+    this.activeVocabulary[index] = replacement;
+
+    // Re-render chips and recompute metrics immediately
+    this.renderVocabularyChips();
+    if (this.dom.essayInput) {
+      this.handleEditorInput();
+    }
+
+    // Visual micro-animation on the newly rolled chip
+    if (this.dom.vocabGrid) {
+      const newChip = this.dom.vocabGrid.querySelector(`[data-word="${replacement.headword}"]`);
+      if (newChip) {
+        newChip.classList.add('chip-rerolled-flash');
+        setTimeout(() => newChip.classList.remove('chip-rerolled-flash'), 500);
+      }
     }
   }
 
@@ -19414,7 +19533,6 @@ class FluentEdgeApp {
     // Strict Guard: Compulsory Target Lexis must be completely fulfilled
     const metrics = analyzeQuickMetrics(text, this.activeVocabulary, this.targetLevel);
     if (metrics.targetWordsTotal > 0 && metrics.targetWordsUsed < metrics.targetWordsTotal) {
-      this.showToast(`Cannot advance: All ${metrics.targetWordsTotal} compulsory target words must be used (${metrics.targetWordsUsed}/${metrics.targetWordsTotal} used).`, "warning");
       return;
     }
 
@@ -19920,12 +20038,9 @@ class FluentEdgeApp {
       if (fromAlert && this.dom.reqAlertCopyAiBtnText) {
         this.dom.reqAlertCopyAiBtnText.textContent = "✓ Copied to Clipboard!";
       }
-
-      this.showToast("✓ AI Prompt copied! Paste into ChatGPT, Claude, or Gemini.", "success");
     } else {
       // Fallback: open modal so user can view/copy manually
       this.openAiPromptModal();
-      this.showToast("Clipboard write restricted — copy prompt directly from preview.", "info");
     }
   }
 
@@ -20029,8 +20144,6 @@ class FluentEdgeApp {
         this.dom.primaryCopyAiPromptBtn.classList.add('copied');
       }
 
-      this.showToast("✓ AI Prompt copied! Paste into ChatGPT, Claude, or Gemini.", "success");
-
       setTimeout(() => {
         if (this.dom.modalCopyBtnText) this.dom.modalCopyBtnText.textContent = "Copy Prompt";
         if (this.dom.primaryCopyBtnLabel) this.dom.primaryCopyBtnLabel.textContent = "Copy Prompt to Clipboard";
@@ -20040,26 +20153,7 @@ class FluentEdgeApp {
       if (this.dom.aiPromptTextarea) {
         this.dom.aiPromptTextarea.select();
       }
-      this.showToast("Prompt selected — press Ctrl+C to copy manually.", "info");
     }
-  }
-
-  // ==========================================
-  // TOAST ALERTS
-  // ==========================================
-
-  showToast(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = message;
-    this.dom.toastContainer.appendChild(toast);
-
-    setTimeout(() => {
-      toast.style.opacity = '0';
-      toast.style.transform = 'translateX(100%)';
-      toast.style.transition = 'all 0.3s ease';
-      setTimeout(() => toast.remove(), 300);
-    }, 4000);
   }
 }
 

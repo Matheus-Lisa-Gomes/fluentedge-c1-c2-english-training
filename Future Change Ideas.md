@@ -23,6 +23,7 @@ A working backlog and brainstorm document for upcoming enhancements, architectur
   - **Exclusive Tech Sub-Themes (`TECH_SUB_THEMES`)**: 12 workplace-focused lenses (Developer Velocity, System Reliability, Technical Debt, Cloud FinOps, Data Privacy & PII, Security & Compliance, Scalability & Concurrency, AI Model Safety, Engineering Culture, Vendor Lock-In, Observability & MTTR, Business Alignment).
   - **Professional Directives (`TECH_PROMPT_TYPES`)**: Generates real-world Architectural Decision Records (ADRs), executive leadership memos to the CTO/VP, technical trade-off analyses, and system modernization proposals.
   - **Identical Visual Design**: Preserves matching button structure, elevation, hotkey badges (`Alt+K`), tier filtering, and seamless integration with the automated Topic Adherence validator and AI Prompt generator. *(Completed)*
+- [x] **Individual Word Reroll for Compulsory Target Lexis**: Added 1-click single-word reroll buttons (`.vocab-reroll-btn` and `.stage2-mini-reroll-btn`) directly on each vocabulary chip in Stage 2. Enforces strict Part of Speech (POS) preservation (rerolling an adverb only draws another adverb, verb draws verb, noun draws noun, adjective draws adjective), prevents duplicate active headwords, respects target CEFR level (C1/C2), updates live lexis counter/evaluator gating in real time, and triggers micro-animation visual feedback (`chip-rerolled-flash`). *(Completed)*
 
 ---
 

@@ -12987,3 +12987,49 @@ export function getRandomVocabularySet(level = 'C1') {
   }));
 }
 
+/**
+ * Reroll a single vocabulary word while strictly preserving its Part of Speech (POS).
+ * If the user rerolls an adverb, it only draws another adverb;
+ * verbs draw verbs, nouns draw nouns, adjectives draw adjectives.
+ * Excludes all current active headwords to prevent duplicates.
+ *
+ * @param {string} pos - Part of speech ('verb', 'noun', 'adjective', 'adverb')
+ * @param {Array<string|object>} currentHeadwords - Currently active headwords to exclude
+ * @param {string} level - 'C1' or 'C2'
+ * @returns {object|null} New word object with stems and headword
+ */
+export function getRandomSingleVocabularyWord(pos, currentHeadwords = [], level = 'C1') {
+  const isC2 = (level || '').toUpperCase() === 'C2';
+  const pool = (isC2 ? VOCABULARY_BY_LEVEL.C2 : VOCABULARY_BY_LEVEL.C1) || VOCABULARY_LEXICON;
+  const targetPos = (pos || '').toLowerCase().trim();
+
+  // Filter candidates strictly matching Part of Speech in current level pool
+  let candidates = pool.filter(w => (w.pos || '').toLowerCase() === targetPos);
+  if (candidates.length === 0) {
+    // Graceful fallback to whole lexicon if current level pool has none
+    candidates = VOCABULARY_LEXICON.filter(w => (w.pos || '').toLowerCase() === targetPos);
+  }
+
+  // Build exclusion set from currently active words
+  const excludeSet = new Set(
+    (currentHeadwords || []).map(item => {
+      if (!item) return '';
+      if (typeof item === 'string') return item.toLowerCase().trim();
+      return (item.headword || item.word || '').toLowerCase().trim();
+    }).filter(Boolean)
+  );
+
+  // Available candidates excluding active set
+  const available = candidates.filter(w => !excludeSet.has((w.headword || '').toLowerCase().trim()));
+  const chosenPool = available.length > 0 ? available : candidates;
+
+  if (chosenPool.length === 0) return null;
+
+  const item = chosenPool[Math.floor(Math.random() * chosenPool.length)];
+  return {
+    ...item,
+    word: item.headword,
+    stems: generateWordStems(item.headword, item.pos)
+  };
+}
+
