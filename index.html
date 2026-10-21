@@ -1007,8 +1007,49 @@
             </button>
           </div>
 
-          <!-- Canvas Audio Waveform Visualizer -->
-          <canvas id="visualizerCanvas" class="visualizer-canvas" width="280" height="52"></canvas>
+          <!-- Audio Studio Console: Mic Level & Gain Meter + Waveform Visualizer -->
+          <div class="speaking-audio-console" id="speakingAudioConsole">
+            <div class="mic-meter-header">
+              <div class="mic-meter-title">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mic-meter-icon" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                  <line x1="12" y1="19" x2="12" y2="23"></line>
+                  <line x1="8" y1="23" x2="16" y2="23"></line>
+                </svg>
+                <span class="mic-meter-label">MIC INPUT</span>
+                <span id="micLevelBadge" class="mic-level-badge status-idle">IDLE</span>
+              </div>
+              <div class="mic-meter-actions">
+                <button id="micTestBtn" type="button" class="mic-test-btn" title="Test microphone level and adjust distance before speaking">
+                  <span class="mic-test-dot"></span>
+                  <span id="micTestBtnText">Test Mic</span>
+                </button>
+                <div id="micClipIndicator" class="mic-clip-indicator" title="Peak Clipping Alert (&gt;90% input gain)">CLIP</div>
+              </div>
+            </div>
+
+            <!-- Precision Gain & Sweet-Spot Level Meter Track -->
+            <div class="mic-level-track" id="micLevelTrack" title="Microphone Input Gain Meter (25%–75% is optimal distance)">
+              <div class="mic-level-zone zone-low" title="Low / Quiet (&lt;25%)"></div>
+              <div class="mic-level-zone zone-optimal" title="Optimal Distance Sweet Spot (25%–75%)"></div>
+              <div class="mic-level-zone zone-high" title="High Gain (75%–90%)"></div>
+              <div class="mic-level-zone zone-clip" title="Clipping / Distortion (&gt;90%)"></div>
+              <!-- Dynamic Level Bar -->
+              <div id="micLevelFill" class="mic-level-fill" style="width: 0%;"></div>
+              <!-- Peak Hold Needle -->
+              <div id="micLevelPeak" class="mic-level-peak" style="left: 0%;"></div>
+            </div>
+
+            <div class="mic-level-scale">
+              <span>-48dB</span>
+              <span class="mic-scale-target">◀ OPTIMAL DISTANCE ▶</span>
+              <span>0dB</span>
+            </div>
+
+            <!-- Canvas Audio Waveform Visualizer -->
+            <canvas id="visualizerCanvas" class="visualizer-canvas" width="280" height="38"></canvas>
+          </div>
 
           <!-- Live Metrics during speech -->
           <div class="speaking-live-metrics">

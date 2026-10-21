@@ -80,7 +80,7 @@ A working backlog and brainstorm document for upcoming enhancements, architectur
     - **Empirical Alignment Benchmarking**: Continually track and log word capture latency, false omission rates, and recognition accuracy across real speaking sessions to drive iterative algorithmic refinements.
 - [ ] **RP Model Audio Speed Adjustment**: Playback rate selector ($0.8\times$, $1.0\times$, $1.2\times$) for the native British English model reading.
 - [ ] **Audio Recording Playback**: Allow candidates to listen back to their recorded audio alongside the phonetic transcription to pinpoint pronunciation nuances.
-- [ ] **Microphone Input Level Meter**: Add visual gain/clipping indicators to help candidates adjust mic distance before speaking.
+- [x] **Microphone Input Level Meter**: Add visual gain/clipping indicators to help candidates adjust mic distance before speaking. *(Completed: Studio audio console with real-time RMS gain meter, target sweet-spot zone 25%–75%, peak hold needle, instantaneous clipping alert LED, and pre-speaking Test Mic calibration mode)*
 - [ ] **Individual Word Practice**: Interactive repeat-after-me drill for words flagged with phonetic deviations or mispronunciations.
 
 ---

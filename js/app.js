@@ -171,6 +171,14 @@ class FluentEdgeApp {
       playModelAudioBtnText: document.getElementById('playModelAudioBtnText'),
       stopModelAudioBtn: document.getElementById('stopModelAudioBtn'),
       visualizerCanvas: document.getElementById('visualizerCanvas'),
+      speakingAudioConsole: document.getElementById('speakingAudioConsole'),
+      micLevelBadge: document.getElementById('micLevelBadge'),
+      micTestBtn: document.getElementById('micTestBtn'),
+      micTestBtnText: document.getElementById('micTestBtnText'),
+      micClipIndicator: document.getElementById('micClipIndicator'),
+      micLevelTrack: document.getElementById('micLevelTrack'),
+      micLevelFill: document.getElementById('micLevelFill'),
+      micLevelPeak: document.getElementById('micLevelPeak'),
       liveSpeakingWpm: document.getElementById('liveSpeakingWpm'),
       liveSpeakingAcc: document.getElementById('liveSpeakingAcc'),
       liveSpeakingTime: document.getElementById('liveSpeakingTime'),
@@ -320,6 +328,9 @@ class FluentEdgeApp {
     this.dom.stopSpeakingBtn.addEventListener('click', () => this.stopSpeakingSession());
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
     this.dom.stopModelAudioBtn.addEventListener('click', () => this.stopModelAudio());
+    if (this.dom.micTestBtn) {
+      this.dom.micTestBtn.addEventListener('click', () => this.toggleMicTest());
+    }
 
 
     // Guard against accidental window/tab close or refresh when draft exists
@@ -498,7 +509,18 @@ class FluentEdgeApp {
         this.dom.startSpeakingBtn.style.display = 'none';
         if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'none';
         this.dom.stopSpeakingBtn.style.display = 'inline-flex';
+        if (this.dom.micTestBtn) this.dom.micTestBtn.style.display = 'none';
+      } else if (status === 'mic_testing') {
+        if (this.dom.micTestBtn) {
+          this.dom.micTestBtn.classList.add('active');
+          if (this.dom.micTestBtnText) this.dom.micTestBtnText.textContent = 'Stop Test';
+        }
       } else if (status === 'idle') {
+        if (this.dom.micTestBtn) {
+          this.dom.micTestBtn.classList.remove('active');
+          this.dom.micTestBtn.style.display = 'inline-flex';
+          if (this.dom.micTestBtnText) this.dom.micTestBtnText.textContent = 'Test Mic';
+        }
         if (!this._isEvaluatingSpeech) {
           this.dom.startSpeakingBtn.style.display = 'inline-flex';
           if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
@@ -507,6 +529,22 @@ class FluentEdgeApp {
       } else if (status === 'model_speaking') {
         this.dom.playModelAudioBtn.style.display = 'none';
         this.dom.stopModelAudioBtn.style.display = 'inline-flex';
+      }
+    };
+
+    this.speechEngine.onMicLevelUpdate = ({ level, peak, isClipping, status, statusText }) => {
+      if (this.dom.micLevelFill) {
+        this.dom.micLevelFill.style.width = `${level}%`;
+      }
+      if (this.dom.micLevelPeak) {
+        this.dom.micLevelPeak.style.left = `${Math.min(99, peak)}%`;
+      }
+      if (this.dom.micClipIndicator) {
+        this.dom.micClipIndicator.classList.toggle('active', isClipping);
+      }
+      if (this.dom.micLevelBadge) {
+        this.dom.micLevelBadge.textContent = statusText;
+        this.dom.micLevelBadge.className = `mic-level-badge status-${status}`;
       }
     };
 
@@ -748,6 +786,11 @@ class FluentEdgeApp {
   }
 
   setStage(stageNum) {
+    if (this.currentStage === 3 && stageNum !== 3) {
+      if (this.speechEngine.isMicTesting) this.speechEngine.stopMicTest();
+      if (this.speechEngine.isListening) this.speechEngine.stopListening();
+    }
+
     if (stageNum === 3) {
       const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
       if (!text) {
@@ -1901,9 +1944,25 @@ class FluentEdgeApp {
     this.setStage(2);
   }
 
+  async toggleMicTest() {
+    if (this.speechEngine.isListening) return;
+    if (this.speechEngine.isMicTesting) {
+      this.speechEngine.stopMicTest();
+    } else {
+      try {
+        await this.speechEngine.startMicTest(this.dom.visualizerCanvas);
+      } catch (err) {
+        console.warn("Could not start mic test:", err);
+      }
+    }
+  }
+
   retrySpeakingSession() {
     const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
     if (!text) return;
+    if (this.speechEngine.isMicTesting) {
+      this.speechEngine.stopMicTest();
+    }
     this.speechEngine.stopListening();
     this.speechEngine.stopSpeakingModel();
     this.speechEngine.setTargetText(text);
