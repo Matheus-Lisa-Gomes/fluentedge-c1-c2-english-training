@@ -15748,15 +15748,6 @@ class SpeechEngine {
     this.elapsedSeconds = 0;
     this.durationInterval = null;
 
-    // Microphone Input Level Meter & Clipping State
-    this.isMicTesting = false;
-    this.micLevel = 0;          // Smoothed level [0, 100]
-    this.micPeak = 0;           // Peak hold level [0, 100]
-    this.micPeakHoldExpiry = 0; // Timestamp when peak hold begins decay
-    this.micClipExpiry = 0;     // Timestamp until clipping LED holds alert
-    this.onMicLevelUpdate = null; // Callback: ({ level, peak, isClipping, status, statusText })
-    this.analyserCanvas = null;
-
     this.targetTokens = []; // Array of word objects { text, clean, status: 'pending'|'matched'|'deviation'|'omitted' }
     this.spokenTranscripts = [];
     this.currentWordIndex = 0;
@@ -16974,66 +16965,10 @@ class SpeechEngine {
     }
   }
 
-  /**
-   * Start pre-speaking microphone level and distance calibration test mode
-   */
-  async startMicTest(canvasElement) {
-    if (this.isListening) return;
-    if (this.isMicTesting) return;
-
-    this.isMicTesting = true;
-    if (this.onStateChange) this.onStateChange({ status: 'mic_testing' });
-
-    try {
-      await this.startAudioVisualizer(canvasElement);
-    } catch (err) {
-      this.isMicTesting = false;
-      if (this.onStateChange) this.onStateChange({ status: 'idle' });
-      this._resetMicLevel();
-      throw err;
-    }
-  }
-
-  /**
-   * Stop pre-speaking microphone level test mode
-   */
-  stopMicTest() {
-    if (!this.isMicTesting) return;
-    this.isMicTesting = false;
-    if (!this.isListening) {
-      this.stopAudioVisualizer();
-    }
-    if (this.onStateChange) this.onStateChange({ status: 'idle' });
-    this._resetMicLevel();
-  }
-
-  /**
-   * Reset mic level and peak meters to idle
-   */
-  _resetMicLevel() {
-    this.micLevel = 0;
-    this.micPeak = 0;
-    this.micPeakHoldExpiry = 0;
-    this.micClipExpiry = 0;
-    if (this.onMicLevelUpdate) {
-      this.onMicLevelUpdate({
-        level: 0,
-        peak: 0,
-        isClipping: false,
-        status: 'idle',
-        statusText: 'IDLE'
-      });
-    }
-  }
-
   async startListening(canvasElement) {
     if (this._autoStopTimer) {
       clearTimeout(this._autoStopTimer);
       this._autoStopTimer = null;
-    }
-
-    if (this.isMicTesting) {
-      this.isMicTesting = false; // Transition seamlessly without breaking active audio graph
     }
 
     if (!this.isSpeechSupported()) {
@@ -17624,7 +17559,7 @@ class SpeechEngine {
   }
 
   /**
-   * Real-time Audio Visualizer & Studio Gain/Clipping Meter with Web Audio API
+   * Real-time Audio Visualizer with HTML5 Canvas & Web Audio API
    */
   async startAudioVisualizer(canvas) {
     try {
@@ -17637,32 +17572,28 @@ class SpeechEngine {
         await this.audioContext.resume();
       }
 
-      this.analyserCanvas = canvas;
-
       // Reuse active media stream or obtain via ensureMediaStream
       const stream = await this.ensureMediaStream();
       if (!this.analyser) {
         const source = this.audioContext.createMediaStreamSource(stream);
         this.analyser = this.audioContext.createAnalyser();
         this.analyser.fftSize = 256;
-        this.analyser.smoothingTimeConstant = 0.2;
         source.connect(this.analyser);
       }
 
       const ctx = canvas.getContext('2d');
       const bufferLength = this.analyser.frequencyBinCount;
-      const freqData = new Uint8Array(bufferLength);
-      const timeData = new Uint8Array(this.analyser.fftSize);
+      const dataArray = new Uint8Array(bufferLength);
 
       if (this.visualizerAnimationId) {
         cancelAnimationFrame(this.visualizerAnimationId);
       }
 
       const draw = () => {
-        if (!this.isListening && !this.isMicTesting) return;
+        if (!this.isListening) return;
 
         this.visualizerAnimationId = requestAnimationFrame(draw);
-        this.analyser.getByteFrequencyData(freqData);
+        this.analyser.getByteFrequencyData(dataArray);
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -17671,7 +17602,7 @@ class SpeechEngine {
         let x = 0;
 
         for (let i = 0; i < bufferLength; i++) {
-          barHeight = (freqData[i] / 255) * (canvas.height * 0.85);
+          barHeight = (dataArray[i] / 255) * (canvas.height * 0.85);
 
           // Elegant Gold-to-Cyan gradient
           const gradient = ctx.createLinearGradient(0, canvas.height, 0, 0);
@@ -17686,85 +17617,6 @@ class SpeechEngine {
 
           x += barWidth + 1;
         }
-
-        // --- Microphone Input Gain & Peak Clipping Calculation ---
-        this.analyser.getByteTimeDomainData(timeData);
-        let sumSquares = 0;
-        let maxDeviation = 0;
-        const len = timeData.length;
-
-        for (let i = 0; i < len; i++) {
-          const norm = (timeData[i] - 128) / 128; // -1.0 to 1.0
-          const absNorm = Math.abs(norm);
-          if (absNorm > maxDeviation) maxDeviation = absNorm;
-          sumSquares += norm * norm;
-        }
-
-        const rms = Math.sqrt(sumSquares / len);
-        const now = Date.now();
-
-        // Instantaneous clipping detection: threshold 0.92 (or raw sample >= 246 or <= 10)
-        const isClippingInstant = maxDeviation >= 0.92;
-        if (isClippingInstant) {
-          this.micClipExpiry = now + 750; // Hold clipping alert for 750ms so user catches transient pops
-        }
-        const isClipping = now < this.micClipExpiry;
-
-        // Convert RMS to calibrated percentage [0, 100]
-        // Speech acoustic dynamic range: -48 dBFS (silence/ambient floor) to 0 dBFS (peak overload)
-        let rawPct = 0;
-        if (rms > 0.001) {
-          const db = 20 * Math.log10(rms);
-          rawPct = Math.max(0, Math.min(100, ((db + 48) / 48) * 100));
-        }
-
-        // Fast attack (immediate responsiveness), smooth exponential decay
-        if (rawPct > this.micLevel) {
-          this.micLevel = rawPct;
-        } else {
-          this.micLevel = Math.max(0, this.micLevel * 0.86);
-        }
-
-        // Peak Hold logic (jumps immediately, holds for 650ms, then decays)
-        if (this.micLevel > this.micPeak) {
-          this.micPeak = this.micLevel;
-          this.micPeakHoldExpiry = now + 650;
-        } else if (now > this.micPeakHoldExpiry) {
-          this.micPeak = Math.max(0, this.micPeak - 1.8);
-        }
-
-        // Calibrate user distance guidance status
-        let status = 'idle';
-        let statusText = 'IDLE';
-
-        if (this.isListening || this.isMicTesting) {
-          if (isClipping || this.micLevel >= 90) {
-            status = 'clipping';
-            statusText = 'CLIPPING! (TOO CLOSE)';
-          } else if (this.micLevel >= 75) {
-            status = 'high';
-            statusText = 'HIGH GAIN';
-          } else if (this.micLevel >= 22) {
-            status = 'optimal';
-            statusText = 'OPTIMAL DISTANCE';
-          } else if (this.micLevel > 4) {
-            status = 'low';
-            statusText = 'LOW (MOVE CLOSER)';
-          } else {
-            status = 'quiet';
-            statusText = this.isMicTesting ? 'SPEAK TO TEST' : 'QUIET';
-          }
-        }
-
-        if (this.onMicLevelUpdate) {
-          this.onMicLevelUpdate({
-            level: Math.round(this.micLevel),
-            peak: Math.round(this.micPeak),
-            isClipping,
-            status,
-            statusText
-          });
-        }
       };
 
       draw();
@@ -17777,12 +17629,6 @@ class SpeechEngine {
     if (this.visualizerAnimationId) {
       cancelAnimationFrame(this.visualizerAnimationId);
       this.visualizerAnimationId = null;
-    }
-    if (this.analyserCanvas) {
-      try {
-        const ctx = this.analyserCanvas.getContext('2d');
-        ctx.clearRect(0, 0, this.analyserCanvas.width, this.analyserCanvas.height);
-      } catch (e) {}
     }
     // Mute tracks while idle so the indicator goes off without destroying the permission handle
     if (this.mediaStream && this.mediaStream.active) {
@@ -17797,7 +17643,6 @@ class SpeechEngine {
         // ignore
       }
     }
-    this._resetMicLevel();
   }
 }
 
@@ -18015,14 +17860,6 @@ class FluentEdgeApp {
       playModelAudioBtnText: document.getElementById('playModelAudioBtnText'),
       stopModelAudioBtn: document.getElementById('stopModelAudioBtn'),
       visualizerCanvas: document.getElementById('visualizerCanvas'),
-      speakingAudioConsole: document.getElementById('speakingAudioConsole'),
-      micLevelBadge: document.getElementById('micLevelBadge'),
-      micTestBtn: document.getElementById('micTestBtn'),
-      micTestBtnText: document.getElementById('micTestBtnText'),
-      micClipIndicator: document.getElementById('micClipIndicator'),
-      micLevelTrack: document.getElementById('micLevelTrack'),
-      micLevelFill: document.getElementById('micLevelFill'),
-      micLevelPeak: document.getElementById('micLevelPeak'),
       liveSpeakingWpm: document.getElementById('liveSpeakingWpm'),
       liveSpeakingAcc: document.getElementById('liveSpeakingAcc'),
       liveSpeakingTime: document.getElementById('liveSpeakingTime'),
@@ -18172,9 +18009,6 @@ class FluentEdgeApp {
     this.dom.stopSpeakingBtn.addEventListener('click', () => this.stopSpeakingSession());
     this.dom.playModelAudioBtn.addEventListener('click', () => this.playModelAudio());
     this.dom.stopModelAudioBtn.addEventListener('click', () => this.stopModelAudio());
-    if (this.dom.micTestBtn) {
-      this.dom.micTestBtn.addEventListener('click', () => this.toggleMicTest());
-    }
 
 
     // Guard against accidental window/tab close or refresh when draft exists
@@ -18353,18 +18187,7 @@ class FluentEdgeApp {
         this.dom.startSpeakingBtn.style.display = 'none';
         if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'none';
         this.dom.stopSpeakingBtn.style.display = 'inline-flex';
-        if (this.dom.micTestBtn) this.dom.micTestBtn.style.display = 'none';
-      } else if (status === 'mic_testing') {
-        if (this.dom.micTestBtn) {
-          this.dom.micTestBtn.classList.add('active');
-          if (this.dom.micTestBtnText) this.dom.micTestBtnText.textContent = 'Stop Test';
-        }
       } else if (status === 'idle') {
-        if (this.dom.micTestBtn) {
-          this.dom.micTestBtn.classList.remove('active');
-          this.dom.micTestBtn.style.display = 'inline-flex';
-          if (this.dom.micTestBtnText) this.dom.micTestBtnText.textContent = 'Test Mic';
-        }
         if (!this._isEvaluatingSpeech) {
           this.dom.startSpeakingBtn.style.display = 'inline-flex';
           if (this.dom.retrySpeakingBtn) this.dom.retrySpeakingBtn.style.display = 'inline-flex';
@@ -18373,22 +18196,6 @@ class FluentEdgeApp {
       } else if (status === 'model_speaking') {
         this.dom.playModelAudioBtn.style.display = 'none';
         this.dom.stopModelAudioBtn.style.display = 'inline-flex';
-      }
-    };
-
-    this.speechEngine.onMicLevelUpdate = ({ level, peak, isClipping, status, statusText }) => {
-      if (this.dom.micLevelFill) {
-        this.dom.micLevelFill.style.width = `${level}%`;
-      }
-      if (this.dom.micLevelPeak) {
-        this.dom.micLevelPeak.style.left = `${Math.min(99, peak)}%`;
-      }
-      if (this.dom.micClipIndicator) {
-        this.dom.micClipIndicator.classList.toggle('active', isClipping);
-      }
-      if (this.dom.micLevelBadge) {
-        this.dom.micLevelBadge.textContent = statusText;
-        this.dom.micLevelBadge.className = `mic-level-badge status-${status}`;
       }
     };
 
@@ -18630,11 +18437,6 @@ class FluentEdgeApp {
   }
 
   setStage(stageNum) {
-    if (this.currentStage === 3 && stageNum !== 3) {
-      if (this.speechEngine.isMicTesting) this.speechEngine.stopMicTest();
-      if (this.speechEngine.isListening) this.speechEngine.stopListening();
-    }
-
     if (stageNum === 3) {
       const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
       if (!text) {
@@ -19788,25 +19590,9 @@ class FluentEdgeApp {
     this.setStage(2);
   }
 
-  async toggleMicTest() {
-    if (this.speechEngine.isListening) return;
-    if (this.speechEngine.isMicTesting) {
-      this.speechEngine.stopMicTest();
-    } else {
-      try {
-        await this.speechEngine.startMicTest(this.dom.visualizerCanvas);
-      } catch (err) {
-        console.warn("Could not start mic test:", err);
-      }
-    }
-  }
-
   retrySpeakingSession() {
     const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
     if (!text) return;
-    if (this.speechEngine.isMicTesting) {
-      this.speechEngine.stopMicTest();
-    }
     this.speechEngine.stopListening();
     this.speechEngine.stopSpeakingModel();
     this.speechEngine.setTargetText(text);
