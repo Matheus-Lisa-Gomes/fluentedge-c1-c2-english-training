@@ -1,5 +1,5 @@
 // Automated verification for FluentEdge Assessment Evaluator
-import { TOPICS, MAIN_SUBJECTS, SUB_THEMES, generateRandomTreeTopic, generateTopicFromTree, getDefaultStartingTopic, checkTopicAdherence } from './js/data/topics.js';
+import { TOPICS, MAIN_SUBJECTS, SUB_THEMES, generateRandomTreeTopic, generateTopicFromTree, getDefaultStartingTopic, checkTopicAdherence, generateRandomTechTreeTopic, TECH_MAIN_SUBJECTS, TECH_SUB_THEMES, TECH_TENSIONS } from './js/data/topics.js';
 import { evaluateEssay, analyzeQuickMetrics, generateAiEssayPrompt } from './js/modules/evaluator.js';
 
 const topicAI = TOPICS[0]; // AI topic (C1/C2)
@@ -292,6 +292,57 @@ const startTopicValid = startTopic.complexity === 1 &&
 
 console.log("Default Starting Topic Valid & Easy:", startTopicValid);
 
+console.log("\n=== TEST 13: Professional Tech Workplace Topic Generator & Topic Adherence ===");
+const techSubjectsValid = TECH_MAIN_SUBJECTS.length >= 15;
+const techSubThemesValid = TECH_SUB_THEMES.length >= 10;
+const randomTechTopic = generateRandomTechTreeTopic('C1', null, Math.random);
+const techTopicHasProps = Boolean(
+  randomTechTopic.isTechTopic === true &&
+  randomTechTopic.mainSubject &&
+  randomTechTopic.subTheme1 &&
+  randomTechTopic.subTheme2 &&
+  randomTechTopic.subTheme1.id !== randomTechTopic.subTheme2.id &&
+  randomTechTopic.directive &&
+  randomTechTopic.title
+);
+
+const easyTechTopic = generateRandomTechTreeTopic('C1', null, Math.random, 1);
+const medTechTopic = generateRandomTechTreeTopic('C1', null, Math.random, 2);
+const hardTechTopic = generateRandomTechTreeTopic('C1', null, Math.random, 3);
+const techDiffTierValid = easyTechTopic.complexity === 1 && medTechTopic.complexity === 2 && hardTechTopic.complexity === 3;
+
+// Test tech topic adherence on a mock technical proposal
+const sampleTechTopic = generateRandomTechTreeTopic('C1', null, () => 0.05);
+const kwsSub = sampleTechTopic.mainSubject.keywords;
+const kwsT1 = sampleTechTopic.subTheme1.keywords;
+const kwsT2 = sampleTechTopic.subTheme2.keywords;
+const mockTechEssay = `The strategic adoption of ${kwsSub[0]} across our organization optimizes modern ${kwsSub[1]}. By actively incorporating ${kwsT1[0]}, our engineering squads safeguard critical ${kwsT2[0]} across enterprise systems.`;
+const techAdherencePass = checkTopicAdherence(mockTechEssay, sampleTechTopic);
+const mockOffTopic = `Culinary traditions and gastronomic experiences celebrate the delicate flavor of organic herbs.`;
+const techAdherenceFail = checkTopicAdherence(mockOffTopic, sampleTechTopic);
+
+console.log("Tech Main Subjects Count >= 15:", techSubjectsValid, `(${TECH_MAIN_SUBJECTS.length})`);
+console.log("Tech Sub-Themes Count >= 10:", techSubThemesValid, `(${TECH_SUB_THEMES.length})`);
+console.log("Random Tech Topic Valid & has isTechTopic: true:", techTopicHasProps);
+console.log("Tech Topic Difficulty Tiers Respected:", techDiffTierValid);
+console.log("Tech Essay Adherence Tested:", techAdherencePass.passes ? "PASS" : "FAIL (Partial/Check Keywords)", "| Off-Topic Blocked:", !techAdherenceFail.passes);
+
+const techPrompt = generateAiEssayPrompt(sampleTechTopic, [
+  { headword: 'extrapolate', pos: 'verb' },
+  { headword: 'inexorable', pos: 'adj' }
+], 'C1');
+const techPromptEmbedsSubject = techPrompt.includes(sampleTechTopic.mainSubject.name);
+const techPromptEmbedsDirective = techPrompt.includes(sampleTechTopic.directive);
+console.log("Tech AI Prompt Embeds Subject & Directive:", techPromptEmbedsSubject && techPromptEmbedsDirective);
+
+const techTopicTestPassed = techSubjectsValid &&
+                            techSubThemesValid &&
+                            techTopicHasProps &&
+                            techDiffTierValid &&
+                            !techAdherenceFail.passes &&
+                            techPromptEmbedsSubject &&
+                            techPromptEmbedsDirective;
+
 const allPassed = evalPassC1.meetsThreshold && 
                   !evalFailB1.meetsThreshold && 
                   evalPassC2.meetsThreshold && 
@@ -304,10 +355,11 @@ const allPassed = evalPassC1.meetsThreshold &&
                   topicAdherenceTestPassed &&
                   difficultyFilterTestPassed &&
                   wordParaGateTestPassed &&
-                  startTopicValid;
+                  startTopicValid &&
+                  techTopicTestPassed;
 
 if (allPassed) {
-  console.log("\n>>> ALL TESTS PASSED: FluentEdge Assessment Evaluator, 10-Word Lexicon Engine, 100% Compulsory Lexis Guard, AI Prompt Generator, Tree Topic Architecture, Obligatory Topic Adherence Guard, Topic Difficulty Tier Filter, Obligatory Word/Paragraph Gates & Fixed Easy Starting Topic accurately configured! <<<");
+  console.log("\n>>> ALL TESTS PASSED: FluentEdge Assessment Evaluator, 10-Word Lexicon Engine, 100% Compulsory Lexis Guard, AI Prompt Generator, Tree Topic Architecture, Obligatory Topic Adherence Guard, Topic Difficulty Tier Filter, Obligatory Word/Paragraph Gates, Fixed Easy Starting Topic & Professional Tech Topic Engine accurately configured! <<<");
 } else {
   console.error("\n>>> TEST FAILED! <<<", {
     evalPassC1: evalPassC1.meetsThreshold,
@@ -319,7 +371,8 @@ if (allPassed) {
     lexisGuardPassed,
     aiPromptTestPassed,
     treeTopicTestPassed,
-    wordParaGateTestPassed
+    wordParaGateTestPassed,
+    techTopicTestPassed
   });
   process.exit(1);
 }

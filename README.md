@@ -80,6 +80,7 @@ Instead of static, repetitive prompts, FluentEdge utilizes a procedural combinat
   * **All Difficulties**: Unrestricted full-pool generation.
 * **Default Starting Topic**: A carefully selected, accessible Easy-tier topic (*Social Media & Daily Life* with *Personal Growth & Self-Improvement* and *Creativity & Innovation*) to provide an inviting entry point without political controversy.
 * **Instant Topic Re-roll (`Alt+T`)**: Draw new combinations anytime respecting the active difficulty filter.
+* **Professional Tech Topic Engine (`Alt+K`)**: Draw exclusive workplace scenarios and engineering dilemmas tailored to the tech industry (e.g., *Microservices vs Monolith*, *Technical Debt Modernization*, *Zero-Trust Security*, *Enterprise LLM Guardrails*, *Cloud FinOps*, *CI/CD Pipelines*) with authentic engineering prompts (Architectural Decision Records, executive leadership memos, and post-mortem mitigation strategies).
 
 #### B. Obligatory Focus & Topic Adherence Gatekeeper
 Candidates cannot bypass the essay topic or write generic boilerplate text. The natural language evaluator verifies:
@@ -195,7 +196,8 @@ Once an essay achieves a passing score (**Band 4 / C1** or **Band 5 / C2**), Sta
 | `Alt + 3` | **Stage 3** | Switch to Speaking Studio (unlocked upon passing assessment) |
 | `Alt + M` | **Toggle Mode** | Switch between C1 Advanced and C2 Proficiency modes |
 | `Alt + D` | **Topic Difficulty** | Cycle topic difficulty tier: Easy → Medium → Hard → All |
-| `Alt + T` | **Draw New Topic** | Procedurally re-roll Root Subject and Sub-Themes |
+| `Alt + T` | **Draw New Topic** | Procedurally re-roll General Academic Root Subject and Sub-Themes |
+| `Alt + K` | **Draw Tech Topic** | Procedurally re-roll Professional Tech Workplace Subject and Sub-Themes |
 | `Alt + W` | **Start Writing** | Proceed from Stage 1 into Stage 2 Composition |
 | `Alt + P` | **AI Prompt Modal** | Open precision prompt generator modal for ChatGPT/Claude/Gemini |
 | `Alt + E` | **Evaluate Essay** | Run full automated CEFR evaluation on written submission |

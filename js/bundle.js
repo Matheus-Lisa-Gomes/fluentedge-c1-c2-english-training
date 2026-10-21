@@ -14349,7 +14349,594 @@ function getDefaultStartingTopic(targetLevel = 'C1') {
 }
 
 // =============================================================================
-// 14. LEGACY SEED TOPICS (backward compat)
+// 14. PROFESSIONAL TECH TOPIC ENGINE (Exclusive Workplace & Tech Curriculum)
+// =============================================================================
+const TECH_MAIN_SUBJECTS = [
+  // ── EASY (complexity: 1) ─────────────────────────────────────────────────
+  {
+    id: 'tech-remote-collaboration',
+    name: 'Remote Engineering & Async Collaboration',
+    shortName: 'Async Engineering',
+    domain: 'Workplace Operations & Remote Culture',
+    complexity: 1,
+    keywords: ['async', 'remote', 'slack', 'zoom', 'documentation', 'collaboration',
+      'standup', 'time zone', 'distributed team', 'communication', 'workflow',
+      'meeting', 'handover', 'telework', 'workplace'],
+    compatibleThemes: ['tech-velocity', 'tech-culture', 'tech-alignment', 'tech-debt']
+  },
+  {
+    id: 'tech-code-reviews',
+    name: 'Code Review Standards & Pull Request Culture',
+    shortName: 'Code Reviews',
+    domain: 'Software Quality & Team Dynamics',
+    complexity: 1,
+    keywords: ['pull request', 'code review', 'pr', 'peer review', 'merge',
+      'reviewer', 'feedback', 'style guide', 'linter', 'standards',
+      'nitpick', 'approval', 'git', 'refactor', 'codebase'],
+    compatibleThemes: ['tech-debt', 'tech-culture', 'tech-velocity', 'tech-reliability']
+  },
+  {
+    id: 'tech-incident-postmortems',
+    name: 'Blameless Incident Post-Mortems & On-Call Health',
+    shortName: 'Incident Post-Mortems',
+    domain: 'SRE & Operations Culture',
+    complexity: 1,
+    keywords: ['postmortem', 'incident', 'on-call', 'outage', 'downtime',
+      'pager', 'root cause', 'retrospective', 'timeline', 'blameless',
+      'action items', 'alerting', 'runbook', 'slo', 'burnout'],
+    compatibleThemes: ['tech-reliability', 'tech-culture', 'tech-observability', 'tech-debt']
+  },
+  {
+    id: 'tech-developer-onboarding',
+    name: 'Engineering Onboarding & Knowledge Transfer',
+    shortName: 'Developer Onboarding',
+    domain: 'Engineering Enablement & Culture',
+    complexity: 1,
+    keywords: ['onboarding', 'documentation', 'mentorship', 'knowledge sharing',
+      'dev environment', 'setup', 'new hire', 'ramping up', 'wiki',
+      'pairing', 'guidelines', 'developer ergonomics', 'ramp-up'],
+    compatibleThemes: ['tech-culture', 'tech-velocity', 'tech-debt', 'tech-alignment']
+  },
+  {
+    id: 'tech-agile-velocity',
+    name: 'Agile Sprints, Estimation & Delivery Velocity',
+    shortName: 'Agile Velocity',
+    domain: 'Product Delivery & Project Management',
+    complexity: 1,
+    keywords: ['sprint', 'agile', 'scrum', 'velocity', 'estimation',
+      'story points', 'backlog', 'ticket', 'jira', 'deadline',
+      'milestone', 'iteration', 'deliverable', 'kanban', 'scope creep'],
+    compatibleThemes: ['tech-velocity', 'tech-alignment', 'tech-debt', 'tech-culture']
+  },
+  {
+    id: 'tech-cloud-migration-basics',
+    name: 'SaaS Adoption & Cloud Storage Migration',
+    shortName: 'Cloud Migration',
+    domain: 'Enterprise IT & Infrastructure',
+    complexity: 1,
+    keywords: ['cloud migration', 'saas', 'cloud storage', 'aws', 'azure',
+      'gcp', 'vendor', 'migration', 'hosting', 'infrastructure',
+      'lift and shift', 'backup', 'redundancy', 'storage', 'provider'],
+    compatibleThemes: ['tech-finops', 'tech-vendor-lockin', 'tech-reliability', 'tech-security']
+  },
+
+  // ── MEDIUM (complexity: 2) ───────────────────────────────────────────────
+  {
+    id: 'tech-microservices-monolith',
+    name: 'Microservices vs Modular Monolith Architecture',
+    shortName: 'Microservices vs Monolith',
+    domain: 'Distributed Systems Architecture',
+    complexity: 2,
+    keywords: ['microservices', 'monolith', 'service boundary', 'modular',
+      'distributed', 'coupling', 'rpc', 'grpc', 'latency', 'deployment',
+      'network call', 'domain-driven design', 'subdomain', 'cohesion'],
+    compatibleThemes: ['tech-reliability', 'tech-debt', 'tech-scalability', 'tech-velocity']
+  },
+  {
+    id: 'tech-ci-cd-automation',
+    name: 'Continuous Integration & Automated Deployment Pipelines',
+    shortName: 'CI/CD & Deployment',
+    domain: 'DevOps & Release Engineering',
+    complexity: 2,
+    keywords: ['ci/cd', 'continuous integration', 'pipeline', 'deployment',
+      'automated testing', 'artifact', 'canary', 'blue-green', 'staging',
+      'production', 'release', 'regression', 'rollback', 'gitops'],
+    compatibleThemes: ['tech-velocity', 'tech-reliability', 'tech-security', 'tech-observability']
+  },
+  {
+    id: 'tech-technical-debt',
+    name: 'Technical Debt & Legacy Code Modernization',
+    shortName: 'Technical Debt',
+    domain: 'Software Maintenance & Quality',
+    complexity: 2,
+    keywords: ['technical debt', 'legacy code', 'refactoring', 'code smell',
+      'maintainability', 'churn', 'architecture', 'rewrite', 'tech debt',
+      'modularity', 'deprecate', 'clean code', 'dependency'],
+    compatibleThemes: ['tech-debt', 'tech-velocity', 'tech-reliability', 'tech-alignment']
+  },
+  {
+    id: 'tech-cloud-finops',
+    name: 'Cloud FinOps & Infrastructure Cost Optimization',
+    shortName: 'Cloud FinOps',
+    domain: 'Cloud Economics & Operations',
+    complexity: 2,
+    keywords: ['finops', 'cloud cost', 'over-provisioning', 'compute',
+      'spending', 'infrastructure cost', 'aws bill', 'reserved instances',
+      'auto-scaling', 'unit economics', 'budget', 'resource allocation'],
+    compatibleThemes: ['tech-finops', 'tech-scalability', 'tech-alignment', 'tech-vendor-lockin']
+  },
+  {
+    id: 'tech-cybersecurity-zero-trust',
+    name: 'Zero-Trust Architecture & Identity Governance',
+    shortName: 'Zero-Trust Security',
+    domain: 'Information Security & Compliance',
+    complexity: 2,
+    keywords: ['zero-trust', 'identity', 'authentication', 'authorization',
+      'least privilege', 'mfa', 'perimeter', 'access control', 'rbac',
+      'iam', 'credentials', 'attack vector', 'security posture'],
+    compatibleThemes: ['tech-security', 'tech-privacy', 'tech-culture', 'tech-reliability']
+  },
+  {
+    id: 'tech-api-design-contracts',
+    name: 'API Versioning, GraphQL & Contract Stability',
+    shortName: 'API Design & Contracts',
+    domain: 'API Engineering & Integration',
+    complexity: 2,
+    keywords: ['api', 'rest', 'graphql', 'versioning', 'contract',
+      'breaking change', 'endpoint', 'payload', 'schema',
+      'backward compatibility', 'deprecation', 'openapi', 'sdk'],
+    compatibleThemes: ['tech-reliability', 'tech-velocity', 'tech-vendor-lockin', 'tech-debt']
+  },
+  {
+    id: 'tech-product-eng-alignment',
+    name: 'Engineering vs Product Management Trade-Offs',
+    shortName: 'Engineering vs Product',
+    domain: 'Cross-Functional Strategy',
+    complexity: 2,
+    keywords: ['product manager', 'engineering lead', 'feature roadmap',
+      'trade-off', 'business requirement', 'scope creep', 'user research',
+      'mvp', 'stakeholder', 'prioritization', 'kpi', 'roi'],
+    compatibleThemes: ['tech-alignment', 'tech-velocity', 'tech-debt', 'tech-culture']
+  },
+  {
+    id: 'tech-data-pipelines-governance',
+    name: 'Data Engineering, Lakes & ETL Governance',
+    shortName: 'Data Pipelines & Lakes',
+    domain: 'Data Engineering & Analytics',
+    complexity: 2,
+    keywords: ['etl', 'data pipeline', 'data lake', 'warehouse', 'schema',
+      'lineage', 'kafka', 'streaming', 'batch', 'data quality',
+      'telemetry', 'analytics', 'snowflake', 'databricks'],
+    compatibleThemes: ['tech-privacy', 'tech-scalability', 'tech-reliability', 'tech-finops']
+  },
+
+  // ── HARD (complexity: 3) ─────────────────────────────────────────────────
+  {
+    id: 'tech-enterprise-ai-llm',
+    name: 'Enterprise LLM Deployment, RAG & Hallucination Guardrails',
+    shortName: 'Enterprise LLM & RAG',
+    domain: 'Applied AI & MLOps',
+    complexity: 3,
+    keywords: ['llm', 'generative ai', 'rag', 'hallucination', 'vector database',
+      'embeddings', 'fine-tuning', 'prompt engineering', 'guardrails',
+      'model drift', 'token cost', 'ai safety', 'context window'],
+    compatibleThemes: ['tech-ai-safety', 'tech-security', 'tech-finops', 'tech-privacy']
+  },
+  {
+    id: 'tech-distributed-consensus',
+    name: 'Distributed Consensus, Sharding & CAP Theorem Trade-Offs',
+    shortName: 'Distributed Consensus',
+    domain: 'High-Scale Distributed Systems',
+    complexity: 3,
+    keywords: ['distributed systems', 'consensus', 'raft', 'paxos', 'cap theorem',
+      'sharding', 'eventual consistency', 'replication', 'partition tolerance',
+      'throughput', 'high availability', 'leader election', 'concurrency'],
+    compatibleThemes: ['tech-scalability', 'tech-reliability', 'tech-observability', 'tech-debt']
+  },
+  {
+    id: 'tech-supply-chain-security',
+    name: 'Open-Source Supply Chain Security & SBOM Governance',
+    shortName: 'Supply Chain Security',
+    domain: 'Infosec & Dependency Management',
+    complexity: 3,
+    keywords: ['supply chain', 'open-source', 'vulnerability', 'sbom',
+      'cve', 'dependency', 'malicious package', 'zero-day', 'cve patch',
+      'audit', 'licensing', 'npm', 'lockfile'],
+    compatibleThemes: ['tech-security', 'tech-vendor-lockin', 'tech-reliability', 'tech-alignment']
+  },
+  {
+    id: 'tech-observability-slo',
+    name: 'Distributed Tracing, Observability & Error Budgets (SLOs)',
+    shortName: 'Observability & SLOs',
+    domain: 'Site Reliability Engineering (SRE)',
+    complexity: 3,
+    keywords: ['observability', 'telemetry', 'distributed tracing', 'slo',
+      'sli', 'sla', 'error budget', 'metrics', 'logs', 'spans',
+      'alert fatigue', 'latency percentiles', 'p99'],
+    compatibleThemes: ['tech-observability', 'tech-reliability', 'tech-velocity', 'tech-culture']
+  },
+  {
+    id: 'tech-cloud-lockin-multicloud',
+    name: 'Proprietary Cloud Lock-In vs Multi-Cloud Portability',
+    shortName: 'Cloud Lock-In & Portability',
+    domain: 'Infrastructure Strategy & Enterprise Architecture',
+    complexity: 3,
+    keywords: ['vendor lock-in', 'multi-cloud', 'portability', 'kubernetes',
+      'terraform', 'cloud-native', 'egress cost', 'proprietary api',
+      'hybrid cloud', 'exit strategy', 'infrastructure as code'],
+    compatibleThemes: ['tech-vendor-lockin', 'tech-finops', 'tech-scalability', 'tech-reliability']
+  },
+  {
+    id: 'tech-ai-autonomous-agents',
+    name: 'Autonomous AI Agents in Production & Human-in-the-Loop',
+    shortName: 'Autonomous AI Agents',
+    domain: 'Agentic AI & Systems Engineering',
+    complexity: 3,
+    keywords: ['autonomous agents', 'agentic', 'human-in-the-loop', 'tool calling',
+      'safety guardrails', 'execution sandbox', 'unintended consequences',
+      'audit log', 'delegation', 'deterministic', 'stochastic'],
+    compatibleThemes: ['tech-ai-safety', 'tech-security', 'tech-reliability', 'tech-alignment']
+  }
+];
+const TECH_SUB_THEMES = [
+  // ── EASY (complexity: 1) ─────────────────────────────────────────────────
+  {
+    id: 'tech-velocity',
+    name: 'Developer Velocity & Time-to-Market',
+    shortName: 'Developer Velocity',
+    complexity: 1,
+    lens: 'How does this practice accelerate cycle time, reduce developer friction, and shorten lead time?',
+    keywords: ['velocity', 'time to market', 'cycle time', 'lead time', 'iteration',
+      'deployment frequency', 'friction', 'productivity', 'shipping speed', 'turnaround']
+  },
+  {
+    id: 'tech-culture',
+    name: 'Engineering Culture & Psychological Safety',
+    shortName: 'Engineering Culture',
+    complexity: 1,
+    lens: 'How does this approach shape psychological safety, blameless reflection, and developer morale?',
+    keywords: ['engineering culture', 'psychological safety', 'mentorship', 'burnout',
+      'retention', 'knowledge silo', 'morale', 'ownership', 'collaboration', 'empathy']
+  },
+  {
+    id: 'tech-alignment',
+    name: 'Cross-Functional Alignment & Business Value',
+    shortName: 'Business Value & Alignment',
+    complexity: 1,
+    lens: 'How does this initiative map to overarching business outcomes, product KPIs, and stakeholder trust?',
+    keywords: ['business value', 'alignment', 'stakeholder', 'kpi', 'roi', 'executive buy-in',
+      'product roadmap', 'deliverables', 'customer impact', 'strategic priority', 'revenue']
+  },
+
+  // ── MEDIUM (complexity: 2) ───────────────────────────────────────────────
+  {
+    id: 'tech-reliability',
+    name: 'System Reliability, SLOs & Fault Tolerance',
+    shortName: 'System Reliability',
+    complexity: 2,
+    lens: 'How does this architecture safeguard uptime, contain failure cascades, and honor error budgets?',
+    keywords: ['reliability', 'uptime', 'fault tolerance', 'high availability', 'slo', 'sla',
+      'resilience', 'failover', 'redundancy', 'graceful degradation', 'circuit breaker']
+  },
+  {
+    id: 'tech-debt',
+    name: 'Technical Debt & Long-Term Maintainability',
+    shortName: 'Technical Debt',
+    complexity: 2,
+    lens: 'What are the compounding maintenance liabilities, refactoring requirements, and cognitive burdens?',
+    keywords: ['technical debt', 'maintainability', 'refactoring', 'code health', 'cognitive load',
+      'legacy', 'extensibility', 'clean code', 'anti-pattern', 'cruft', 'modularity']
+  },
+  {
+    id: 'tech-finops',
+    name: 'Cloud Economics & Resource Optimization (FinOps)',
+    shortName: 'Cloud FinOps & Cost',
+    complexity: 2,
+    lens: 'What are the unit economics, infrastructure costs, and resource efficiency profiles?',
+    keywords: ['finops', 'cloud cost', 'roi', 'unit economics', 'over-provisioning',
+      'compute budget', 'cost efficiency', 'spend', 'resource optimization', 'bill']
+  },
+  {
+    id: 'tech-privacy',
+    name: 'Data Privacy, Telemetry & PII Protection',
+    shortName: 'Data Privacy & PII',
+    complexity: 2,
+    lens: 'How are sensitive customer data, telemetry payloads, and PII safeguarded against leakage?',
+    keywords: ['privacy', 'pii', 'gdpr', 'telemetry', 'data retention', 'anonymization',
+      'consent', 'data breach', 'audit trail', 'confidentiality', 'sanitization']
+  },
+  {
+    id: 'tech-vendor-lockin',
+    name: 'Vendor Lock-in, Open Standards & Interoperability',
+    shortName: 'Vendor Lock-In',
+    complexity: 2,
+    lens: 'What are the migration friction, contractual leverage, and switching costs associated with proprietary vendors?',
+    keywords: ['vendor lock-in', 'open standards', 'interoperability', 'proprietary',
+      'switching cost', 'open-source', 'portable', 'api contract', 'multi-vendor']
+  },
+  {
+    id: 'tech-observability',
+    name: 'Observability, Telemetry & MTTR',
+    shortName: 'Observability & MTTR',
+    complexity: 2,
+    lens: 'How comprehensively can engineers reconstruct system state, diagnose anomalies, and reduce MTTR?',
+    keywords: ['observability', 'telemetry', 'mttr', 'distributed tracing',
+      'root cause analysis', 'alerting', 'dashboard', 'spans', 'metrics', 'monitoring']
+  },
+
+  // ── HARD (complexity: 3) ─────────────────────────────────────────────────
+  {
+    id: 'tech-security',
+    name: 'Security Posture, Threat Modeling & Compliance',
+    shortName: 'Security & Compliance',
+    complexity: 3,
+    lens: 'What attack surfaces, privilege escalation risks, and compliance standards must be addressed?',
+    keywords: ['security', 'threat model', 'vulnerability', 'exploit', 'compliance',
+      'least privilege', 'soc2', 'cve', 'attack surface', 'encryption', 'infosec', 'audit']
+  },
+  {
+    id: 'tech-scalability',
+    name: 'Horizontal Scalability & Concurrency',
+    shortName: 'Scalability & Concurrency',
+    complexity: 3,
+    lens: 'How effectively does the design handle non-linear traffic surges, data volume growth, and lock contention?',
+    keywords: ['scalability', 'concurrency', 'throughput', 'load balancing',
+      'horizontal scaling', 'bottleneck', 'caching', 'sharding', 'contention', 'p99 latency']
+  },
+  {
+    id: 'tech-ai-safety',
+    name: 'AI Model Safety, Hallucination & Determinism',
+    shortName: 'AI Safety & Guardrails',
+    complexity: 3,
+    lens: 'How are non-deterministic outputs, prompt injections, hallucinations, and safety guardrails controlled?',
+    keywords: ['ai safety', 'hallucination', 'guardrails', 'determinism', 'evals',
+      'ground truth', 'adversarial', 'model drift', 'reliability', 'explainability']
+  }
+];
+const TECH_TENSIONS = [
+  {
+    id: 'velocity-vs-reliability',
+    name: 'Velocity vs Reliability',
+    pole1: 'accelerating feature release velocity',
+    pole2: 'maintaining strict system reliability and low error budgets',
+    compatibleThemes: ['tech-reliability', 'tech-velocity', 'tech-debt', 'tech-observability']
+  },
+  {
+    id: 'build-vs-buy',
+    name: 'Build In-House vs Buy Vendor SaaS',
+    pole1: 'building bespoke in-house software tailored to unique requirements',
+    pole2: 'procuring commercial vendor SaaS to minimize time-to-market',
+    compatibleThemes: ['tech-vendor-lockin', 'tech-finops', 'tech-security', 'tech-alignment', 'tech-debt']
+  },
+  {
+    id: 'technical-purity-vs-pragmatism',
+    name: 'Technical Purity vs Pragmatic Delivery',
+    pole1: 'rigorous architectural elegance and complete technical debt eradication',
+    pole2: 'pragmatic compromises to meet competitive delivery deadlines',
+    compatibleThemes: ['tech-debt', 'tech-velocity', 'tech-alignment', 'tech-culture']
+  },
+  {
+    id: 'innovation-vs-stability',
+    name: 'Innovation vs Battle-Tested Stability',
+    pole1: 'adopting modern, cutting-edge frameworks and AI capabilities',
+    pole2: 'standardizing on mature, battle-tested infrastructure stacks',
+    compatibleThemes: ['tech-reliability', 'tech-security', 'tech-scalability', 'tech-ai-safety']
+  },
+  {
+    id: 'security-vs-ergonomics',
+    name: 'Security Guardrails vs Developer Ergonomics',
+    pole1: 'enforcing rigorous zero-trust controls and mandatory compliance gates',
+    pole2: 'preserving seamless developer ergonomics and frictionless workflows',
+    compatibleThemes: ['tech-security', 'tech-velocity', 'tech-privacy', 'tech-culture']
+  },
+  {
+    id: 'automation-vs-human-in-the-loop',
+    name: 'Autonomous Automation vs Human In-The-Loop',
+    pole1: 'fully autonomous agentic pipelines and automated self-healing mechanisms',
+    pole2: 'mandatory human review, sign-offs, and contextual operational oversight',
+    compatibleThemes: ['tech-ai-safety', 'tech-reliability', 'tech-observability', 'tech-security']
+  }
+];
+const TECH_SCOPES = [
+  { id: 'team',       label: 'across core engineering squads',         framing: 'for software development teams' },
+  { id: 'enterprise', label: 'at the enterprise infrastructure tier',   framing: 'for engineering leadership and enterprise architects' },
+  { id: 'cloud',      label: 'across distributed multi-cloud services', framing: 'for cloud infrastructure and platform operations' },
+  { id: 'client',     label: 'at the customer-facing SLA level',       framing: 'for enterprise clients and product end-users' }
+];
+const TECH_STAKEHOLDERS = [
+  { id: 'engineers',   name: 'Software Engineers & Technical Leads' },
+  { id: 'sre',         name: 'Site Reliability & DevOps Engineers' },
+  { id: 'product',     name: 'Product Management & UX Designers' },
+  { id: 'security',    name: 'Information Security & Compliance Officers' },
+  { id: 'executives',  name: 'Engineering Leadership (CTO & VP of Engineering)' },
+  { id: 'customers',   name: 'Enterprise Customers & End Users' }
+];
+const TECH_PROMPT_TYPES = [
+  {
+    id: 'adr-proposal',
+    label: 'Architectural Decision Record (ADR) & Engineering Proposal',
+    generate: function(subject, theme, tension, scope, stakeholders) {
+      var sh = _stk(stakeholders);
+      return 'Draft a formal Architectural Decision Record (ADR) and engineering proposal evaluating whether ' +
+        subject.name + ' warrants adoption given its impact on ' + theme.shortName.toLowerCase() +
+        ' ' + scope.label + '. Address the concerns of ' + sh + ', critically balancing ' +
+        tension.pole1 + ' against ' + tension.pole2 + '.';
+    }
+  },
+  {
+    id: 'executive-memo',
+    label: 'Executive Leadership Memo',
+    generate: function(subject, theme, tension, scope) {
+      return 'Synthesise a strategic executive memo directed to the CTO and engineering leadership analyzing the implications of ' +
+        subject.name + ' on ' + theme.shortName.toLowerCase() + ' ' + scope.framing +
+        '. Formulate concrete recommendations resolving the tension between ' + tension.pole1 +
+        ' and ' + tension.pole2 + '.';
+    }
+  },
+  {
+    id: 'trade-off-critique',
+    label: 'Technical Trade-Off & Risk Analysis',
+    generate: function(subject, theme, tension, scope) {
+      return 'Deliver a rigorous technical critique evaluating how ' + subject.name +
+        ' influences ' + theme.shortName.toLowerCase() + ' ' + scope.label +
+        '. Discuss the extent to which ' + tension.pole1 + ' must be tempered by ' +
+        tension.pole2 + '.';
+    }
+  },
+  {
+    id: 'system-modernization',
+    label: 'System Modernization & Operational Strategy',
+    generate: function(subject, theme, tension, scope, stakeholders) {
+      var sh = _stk(stakeholders);
+      return 'Critically assess the operational viability of implementing ' + subject.name +
+        ' to reinforce ' + theme.shortName.toLowerCase() + ' ' + scope.framing +
+        '. Deliberate whether ' + tension.pole1 + ' justifies the strategic risks to ' +
+        sh + ' when weighed against ' + tension.pole2 + '.';
+    }
+  }
+];
+
+function _buildTechTitle(subject, primaryTheme, secondaryTheme, tension) {
+  var patterns = [
+    function() { return subject.name + ': Balancing ' + primaryTheme.shortName + ' with ' + secondaryTheme.shortName; },
+    function() { return subject.name + ' in Modern Enterprise Engineering: The ' + tension.name + ' Trade-Off'; },
+    function() { return 'Architectural Modernization: ' + subject.name + ' through the Lens of ' + primaryTheme.shortName; },
+    function() { return 'Engineering Strategy: ' + subject.name + ', ' + primaryTheme.shortName + ' & ' + secondaryTheme.shortName; },
+    function() { return 'The ' + tension.name + ' Conundrum: ' + subject.name + ' and Its Impact on ' + primaryTheme.shortName; }
+  ];
+  return _pick(patterns)();
+}
+
+const TECH_COOLDOWN_SIZE = 8;
+const _recentTechCombos = [];
+
+function _markTechUsed(subjectId, themeId) {
+  _recentTechCombos.push(subjectId + '::' + themeId);
+  if (_recentTechCombos.length > TECH_COOLDOWN_SIZE) _recentTechCombos.shift();
+}
+
+function _isTechOnCooldown(subjectId, themeId) {
+  return _recentTechCombos.includes(subjectId + '::' + themeId);
+}
+function generateRandomTechTreeTopic(targetLevel, excludeSubjectId, rng, difficultyTier) {
+  targetLevel      = targetLevel || 'C1';
+  excludeSubjectId = excludeSubjectId || null;
+  rng              = rng || Math.random;
+
+  var tier = null;
+  if (difficultyTier === 1 || difficultyTier === '1' || difficultyTier === 'easy') tier = 1;
+  else if (difficultyTier === 2 || difficultyTier === '2' || difficultyTier === 'medium') tier = 2;
+  else if (difficultyTier === 3 || difficultyTier === '3' || difficultyTier === 'hard') tier = 3;
+
+  var profile = DIFFICULTY_PROFILES[targetLevel] || DIFFICULTY_PROFILES.C1;
+  var preferredComplexities = tier ? [tier] : (profile.preferredComplexities || [1, 2, 3]);
+
+  // Step 1: pick tech subject (respecting difficulty tier and excluding previous)
+  var eligibleSubjects = TECH_MAIN_SUBJECTS.filter(function(s) {
+    var notExcluded = s.id !== excludeSubjectId;
+    return tier ? (notExcluded && s.complexity === tier) : notExcluded;
+  });
+  if (eligibleSubjects.length === 0) {
+    eligibleSubjects = TECH_MAIN_SUBJECTS.filter(function(s) { return s.id !== excludeSubjectId; });
+  }
+  if (eligibleSubjects.length === 0) {
+    eligibleSubjects = TECH_MAIN_SUBJECTS;
+  }
+  var subject = _weightedPick(
+    eligibleSubjects,
+    function(s) { return preferredComplexities.includes(s.complexity) ? 2 : 1; },
+    rng
+  );
+
+  // Step 2: pick primary tech theme
+  var compatibleThemeIds = subject.compatibleThemes || TECH_SUB_THEMES.map(function(t) { return t.id; });
+  var eligibleThemes = TECH_SUB_THEMES.filter(function(t) {
+    var match = compatibleThemeIds.includes(t.id) && !_isTechOnCooldown(subject.id, t.id);
+    return tier ? (match && t.complexity === tier) : match;
+  });
+  if (eligibleThemes.length === 0) {
+    eligibleThemes = TECH_SUB_THEMES.filter(function(t) {
+      return compatibleThemeIds.includes(t.id) && !_isTechOnCooldown(subject.id, t.id);
+    });
+  }
+  if (eligibleThemes.length === 0) {
+    eligibleThemes = TECH_SUB_THEMES.filter(function(t) { return compatibleThemeIds.includes(t.id); });
+  }
+  if (eligibleThemes.length === 0) {
+    eligibleThemes = TECH_SUB_THEMES;
+  }
+
+  var primaryTheme = _pick(eligibleThemes, rng);
+  _markTechUsed(subject.id, primaryTheme.id);
+
+  // Step 3: secondary tech theme
+  var secondaryCandidates = TECH_SUB_THEMES.filter(function(t) {
+    var match = t.id !== primaryTheme.id && compatibleThemeIds.includes(t.id);
+    return tier ? (match && t.complexity === tier) : match;
+  });
+  if (secondaryCandidates.length === 0) {
+    secondaryCandidates = TECH_SUB_THEMES.filter(function(t) { return t.id !== primaryTheme.id; });
+  }
+  var secondaryTheme = secondaryCandidates.length > 0
+    ? _pick(secondaryCandidates, rng)
+    : TECH_SUB_THEMES[0];
+
+  // Step 4: tension
+  var compatibleTensions = TECH_TENSIONS.filter(function(t) {
+    return t.compatibleThemes.includes(primaryTheme.id);
+  });
+  var tension = compatibleTensions.length > 0 ? _pick(compatibleTensions, rng) : _pick(TECH_TENSIONS, rng);
+
+  // Step 5: scope
+  var scope = _pick(TECH_SCOPES, rng);
+
+  // Step 6: stakeholders (2 distinct)
+  var shuffled = TECH_STAKEHOLDERS.slice().sort(function() { return rng() - 0.5; });
+  var stakeholders = shuffled.slice(0, 1 + Math.floor(rng() * 2) + 1);
+
+  // Step 7: prompt type
+  var promptType = _pick(TECH_PROMPT_TYPES, rng);
+
+  var directive = promptType.generate(subject, primaryTheme, tension, scope, stakeholders);
+  var title = _buildTechTitle(subject, primaryTheme, secondaryTheme, tension);
+  var id = 'tech-tree-' + subject.id + '-' + primaryTheme.id + '-' + secondaryTheme.id;
+
+  var topic = {
+    id: id,
+    title: title,
+    directive: directive,
+    mainSubject: subject,
+    subTheme1: primaryTheme,
+    subTheme2: secondaryTheme,
+    complexity: subject.complexity || 2,
+    complexityLabel: subject.complexity === 1 ? 'Easy' : (subject.complexity === 2 ? 'Medium' : 'Hard'),
+    category: subject.domain || 'Software Engineering & Enterprise Tech',
+    type: targetLevel === 'C2' ? 'C2 Tech Executive Strategic Brief' : 'C1 Professional Tech Proposal & Architecture Review',
+    cefrTarget: profile.cefrTarget,
+    recommendedTime: profile.recommendedTime,
+    tension: tension,
+    scope: scope,
+    stakeholders: stakeholders,
+    promptType: promptType,
+    targetLevel: targetLevel,
+    isTechTopic: true,
+    seed: {
+      subjectId: subject.id,
+      themeId: primaryTheme.id,
+      secondaryThemeId: secondaryTheme.id,
+      tensionId: tension.id,
+      promptTypeId: promptType.id,
+      scopeId: scope.id,
+      stakeholderIds: stakeholders.map(function(s) { return s.id; }),
+      targetLevel: targetLevel
+    }
+  };
+
+  return topic;
+}
+
+// =============================================================================
+// 15. LEGACY SEED TOPICS (backward compat)
 // =============================================================================
 const TOPICS = [
   generateTopicFromTree(
@@ -17151,6 +17738,9 @@ class FluentEdgeApp {
 
       // Topic Card & Tree Architecture
       rerollTopicBtn: document.getElementById('rerollTopicBtn'),
+      rerollTechTopicBtn: document.getElementById('rerollTechTopicBtn'),
+      topicTreeBadge: document.getElementById('topicTreeBadge'),
+      topicTreeBadgeText: document.getElementById('topicTreeBadgeText'),
       topicDifficultySelector: document.getElementById('topicDifficultySelector'),
       topicDifficultyBtn: document.getElementById('topicDifficultyBtn'),
       topicDifficultyValue: document.getElementById('topicDifficultyValue'),
@@ -17295,6 +17885,13 @@ class FluentEdgeApp {
     if (this.dom.rerollTopicBtn) {
       this.dom.rerollTopicBtn.addEventListener('click', () => {
         this.rerollTopic();
+      });
+    }
+
+    // Professional Tech Topic event (Draw Tech Topic)
+    if (this.dom.rerollTechTopicBtn) {
+      this.dom.rerollTechTopicBtn.addEventListener('click', () => {
+        this.rerollTechTopic();
       });
     }
 
@@ -17526,6 +18123,13 @@ class FluentEdgeApp {
         return;
       }
 
+      // Alt+K (or Alt+W)  →  Draw Professional Tech Topic
+      if (e.altKey && (e.key === 'k' || e.key === 'K' || e.key === 'w' || e.key === 'W') && !modalOpen) {
+        e.preventDefault();
+        this.rerollTechTopic();
+        return;
+      }
+
       // Ctrl+Enter  →  Evaluate (works even from inside the essay textarea)
       if (e.ctrlKey && e.key === 'Enter' && !modalOpen) {
         e.preventDefault();
@@ -17714,7 +18318,11 @@ class FluentEdgeApp {
     }
 
     if (this.currentTopic) {
-      this.currentTopic.type = isC2 ? 'C2 Proficiency Discursive Essay' : 'C1/C2 Academic Essay';
+      if (this.currentTopic.isTechTopic) {
+        this.currentTopic.type = isC2 ? 'C2 Tech Executive Strategic Brief' : 'C1 Professional Tech Proposal & Architecture Review';
+      } else {
+        this.currentTopic.type = isC2 ? 'C2 Proficiency Discursive Essay' : 'C1/C2 Academic Essay';
+      }
       this.currentTopic.cefrTarget = isC2 ? 'C2' : 'C1 / C2';
       this.currentTopic.recommendedTime = isC2 ? '50 minutes' : '45 minutes';
       if (this.dom.topicType) this.dom.topicType.textContent = this.currentTopic.type;
@@ -17884,6 +18492,19 @@ class FluentEdgeApp {
       this.dom.topicComplexityBadge.title = `Topic Complexity: ${compLabel} Tier`;
     }
 
+    // Obligatory Focus vs Tech Workplace Focus Badge
+    if (this.dom.topicTreeBadge) {
+      if (current.isTechTopic) {
+        this.dom.topicTreeBadge.classList.add('tech-mode');
+        this.dom.topicTreeBadge.title = 'Professional tech workplace focus generated from engineering curriculum';
+        if (this.dom.topicTreeBadgeText) this.dom.topicTreeBadgeText.textContent = 'Tech Workplace Focus';
+      } else {
+        this.dom.topicTreeBadge.classList.remove('tech-mode');
+        this.dom.topicTreeBadge.title = 'Obligatory academic focus generated from subject-subtheme tree';
+        if (this.dom.topicTreeBadgeText) this.dom.topicTreeBadgeText.textContent = 'Obligatory Focus';
+      }
+    }
+
     // Tree nodes: Root Subject, Sub-theme 1, Sub-theme 2
     if (this.dom.topicMainSubjectText) {
       this.dom.topicMainSubjectText.textContent = current.mainSubject?.name || 'Academic Core';
@@ -17948,7 +18569,11 @@ class FluentEdgeApp {
     }
 
     if (reroll) {
-      this.rerollTopic();
+      if (this.currentTopic?.isTechTopic) {
+        this.rerollTechTopic();
+      } else {
+        this.rerollTopic();
+      }
     }
   }
 
@@ -17956,6 +18581,15 @@ class FluentEdgeApp {
     this.hasDrawnTopic = true;
     const currentSubjectId = this.currentTopic?.mainSubject?.id || null;
     const newTopic = generateRandomTreeTopic(this.targetLevel, currentSubjectId, Math.random, this.topicDifficulty);
+    this.currentTopic = newTopic;
+    if (this.dom.essayInput) this.dom.essayInput.value = "";
+    this.loadTopic(newTopic);
+  }
+
+  rerollTechTopic() {
+    this.hasDrawnTopic = true;
+    const currentSubjectId = this.currentTopic?.mainSubject?.id || null;
+    const newTopic = generateRandomTechTreeTopic(this.targetLevel, currentSubjectId, Math.random, this.topicDifficulty);
     this.currentTopic = newTopic;
     if (this.dom.essayInput) this.dom.essayInput.value = "";
     this.loadTopic(newTopic);

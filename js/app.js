@@ -2,7 +2,7 @@
  * FluentEdge: C1–C2 English Training - Main Application Controller
  */
 
-import { TOPICS, MAIN_SUBJECTS, SUB_THEMES, generateRandomTreeTopic, generateTopicFromTree, getDefaultStartingTopic, checkTopicAdherence } from './data/topics.js';
+import { TOPICS, MAIN_SUBJECTS, SUB_THEMES, generateRandomTreeTopic, generateTopicFromTree, getDefaultStartingTopic, checkTopicAdherence, generateRandomTechTreeTopic, TECH_MAIN_SUBJECTS, TECH_SUB_THEMES } from './data/topics.js';
 import { getRandomVocabularySet } from './data/vocabulary.js';
 import { analyzeQuickMetrics, evaluateEssay, checkTargetWordUsage, generateAiEssayPrompt } from './modules/evaluator.js';
 import { SpeechEngine } from './modules/speech.js';
@@ -95,6 +95,9 @@ class FluentEdgeApp {
 
       // Topic Card & Tree Architecture
       rerollTopicBtn: document.getElementById('rerollTopicBtn'),
+      rerollTechTopicBtn: document.getElementById('rerollTechTopicBtn'),
+      topicTreeBadge: document.getElementById('topicTreeBadge'),
+      topicTreeBadgeText: document.getElementById('topicTreeBadgeText'),
       topicDifficultySelector: document.getElementById('topicDifficultySelector'),
       topicDifficultyBtn: document.getElementById('topicDifficultyBtn'),
       topicDifficultyValue: document.getElementById('topicDifficultyValue'),
@@ -239,6 +242,13 @@ class FluentEdgeApp {
     if (this.dom.rerollTopicBtn) {
       this.dom.rerollTopicBtn.addEventListener('click', () => {
         this.rerollTopic();
+      });
+    }
+
+    // Professional Tech Topic event (Draw Tech Topic)
+    if (this.dom.rerollTechTopicBtn) {
+      this.dom.rerollTechTopicBtn.addEventListener('click', () => {
+        this.rerollTechTopic();
       });
     }
 
@@ -470,6 +480,13 @@ class FluentEdgeApp {
         return;
       }
 
+      // Alt+K (or Alt+W)  →  Draw Professional Tech Topic
+      if (e.altKey && (e.key === 'k' || e.key === 'K' || e.key === 'w' || e.key === 'W') && !modalOpen) {
+        e.preventDefault();
+        this.rerollTechTopic();
+        return;
+      }
+
       // Ctrl+Enter  →  Evaluate (works even from inside the essay textarea)
       if (e.ctrlKey && e.key === 'Enter' && !modalOpen) {
         e.preventDefault();
@@ -658,7 +675,11 @@ class FluentEdgeApp {
     }
 
     if (this.currentTopic) {
-      this.currentTopic.type = isC2 ? 'C2 Proficiency Discursive Essay' : 'C1/C2 Academic Essay';
+      if (this.currentTopic.isTechTopic) {
+        this.currentTopic.type = isC2 ? 'C2 Tech Executive Strategic Brief' : 'C1 Professional Tech Proposal & Architecture Review';
+      } else {
+        this.currentTopic.type = isC2 ? 'C2 Proficiency Discursive Essay' : 'C1/C2 Academic Essay';
+      }
       this.currentTopic.cefrTarget = isC2 ? 'C2' : 'C1 / C2';
       this.currentTopic.recommendedTime = isC2 ? '50 minutes' : '45 minutes';
       if (this.dom.topicType) this.dom.topicType.textContent = this.currentTopic.type;
@@ -828,6 +849,19 @@ class FluentEdgeApp {
       this.dom.topicComplexityBadge.title = `Topic Complexity: ${compLabel} Tier`;
     }
 
+    // Obligatory Focus vs Tech Workplace Focus Badge
+    if (this.dom.topicTreeBadge) {
+      if (current.isTechTopic) {
+        this.dom.topicTreeBadge.classList.add('tech-mode');
+        this.dom.topicTreeBadge.title = 'Professional tech workplace focus generated from engineering curriculum';
+        if (this.dom.topicTreeBadgeText) this.dom.topicTreeBadgeText.textContent = 'Tech Workplace Focus';
+      } else {
+        this.dom.topicTreeBadge.classList.remove('tech-mode');
+        this.dom.topicTreeBadge.title = 'Obligatory academic focus generated from subject-subtheme tree';
+        if (this.dom.topicTreeBadgeText) this.dom.topicTreeBadgeText.textContent = 'Obligatory Focus';
+      }
+    }
+
     // Tree nodes: Root Subject, Sub-theme 1, Sub-theme 2
     if (this.dom.topicMainSubjectText) {
       this.dom.topicMainSubjectText.textContent = current.mainSubject?.name || 'Academic Core';
@@ -892,7 +926,11 @@ class FluentEdgeApp {
     }
 
     if (reroll) {
-      this.rerollTopic();
+      if (this.currentTopic?.isTechTopic) {
+        this.rerollTechTopic();
+      } else {
+        this.rerollTopic();
+      }
     }
   }
 
@@ -900,6 +938,15 @@ class FluentEdgeApp {
     this.hasDrawnTopic = true;
     const currentSubjectId = this.currentTopic?.mainSubject?.id || null;
     const newTopic = generateRandomTreeTopic(this.targetLevel, currentSubjectId, Math.random, this.topicDifficulty);
+    this.currentTopic = newTopic;
+    if (this.dom.essayInput) this.dom.essayInput.value = "";
+    this.loadTopic(newTopic);
+  }
+
+  rerollTechTopic() {
+    this.hasDrawnTopic = true;
+    const currentSubjectId = this.currentTopic?.mainSubject?.id || null;
+    const newTopic = generateRandomTechTreeTopic(this.targetLevel, currentSubjectId, Math.random, this.topicDifficulty);
     this.currentTopic = newTopic;
     if (this.dom.essayInput) this.dom.essayInput.value = "";
     this.loadTopic(newTopic);

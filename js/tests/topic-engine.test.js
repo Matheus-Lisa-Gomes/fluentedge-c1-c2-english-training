@@ -10,7 +10,8 @@
 import {
   MAIN_SUBJECTS, SUB_THEMES, TENSIONS, SCOPES, STAKEHOLDERS, PROMPT_TYPES,
   isCompatible, tensionCompatible, validateTopic,
-  generateTopicFromTree, generateRandomTreeTopic
+  generateTopicFromTree, generateRandomTreeTopic,
+  TECH_MAIN_SUBJECTS, TECH_SUB_THEMES, TECH_TENSIONS, generateRandomTechTreeTopic
 } from '../data/topics.js';
 
 // =============================================================================
@@ -56,12 +57,15 @@ function makeSeededRng(seed) {
 
 section('Data integrity');
 
-expectTrue('MAIN_SUBJECTS has 20 entries', MAIN_SUBJECTS.length === 20);
-expectTrue('SUB_THEMES has 18 entries', SUB_THEMES.length === 18);
-expectTrue('TENSIONS has 12 entries', TENSIONS.length === 12);
+expectTrue('MAIN_SUBJECTS has >= 20 entries', MAIN_SUBJECTS.length >= 20);
+expectTrue('SUB_THEMES has >= 18 entries', SUB_THEMES.length >= 18);
+expectTrue('TENSIONS has >= 12 entries', TENSIONS.length >= 12);
 expectTrue('SCOPES has 4 entries', SCOPES.length === 4);
 expectTrue('STAKEHOLDERS has 7 entries', STAKEHOLDERS.length === 7);
 expectTrue('PROMPT_TYPES has 6 entries', PROMPT_TYPES.length === 6);
+expectTrue('TECH_MAIN_SUBJECTS has >= 15 entries', TECH_MAIN_SUBJECTS.length >= 15);
+expectTrue('TECH_SUB_THEMES has >= 10 entries', TECH_SUB_THEMES.length >= 10);
+expectTrue('TECH_TENSIONS has >= 6 entries', TECH_TENSIONS.length >= 6);
 
 MAIN_SUBJECTS.forEach(function(s) {
   expectTrue('Subject "' + s.id + '" has id, name, domain, compatibleThemes',

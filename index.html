@@ -493,12 +493,12 @@
 
               <!-- Row 1: Badge + Complexity + Root Subject + Difficulty selector + Draw button -->
               <div class="tree-row tree-row-root">
-                <span class="topic-tree-badge" title="Obligatory academic focus generated from subject-subtheme tree">
+                <span class="topic-tree-badge" id="topicTreeBadge" title="Obligatory academic or professional focus generated from subject-subtheme tree">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                     <circle cx="12" cy="12" r="10"></circle>
                     <circle cx="12" cy="12" r="3"></circle>
                   </svg>
-                  <span>Obligatory Focus</span>
+                  <span id="topicTreeBadgeText">Obligatory Focus</span>
                 </span>
 
                 <span class="topic-complexity-badge tier-easy" id="topicComplexityBadge" title="Topic Complexity Tier">Easy</span>
@@ -508,7 +508,7 @@
                   <span class="tree-node-val" id="topicMainSubjectText">Social Media &amp; Daily Life</span>
                 </div>
 
-                <!-- Difficulty selector and Draw button live at the end of row 1 -->
+                <!-- Difficulty selector and Draw buttons live at the end of row 1 -->
                 <div class="stage2-topic-nav">
                   <div class="topic-difficulty-selector" id="topicDifficultySelector">
                     <button type="button" id="topicDifficultyBtn" class="btn btn-secondary btn-sm topic-difficulty-btn" title="Filter Topic Difficulty Tier" aria-haspopup="listbox" aria-expanded="false">
@@ -549,15 +549,27 @@
                     </div>
                   </div>
 
-                  <button id="rerollTopicBtn" class="btn btn-secondary btn-sm reroll-topic-btn" title="Draw New Random Tree Topic (Alt+T)" aria-label="Draw New Topic">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
-                      <polyline points="23 4 23 10 17 10"></polyline>
-                      <polyline points="1 20 1 14 7 14"></polyline>
-                      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-                    </svg>
-                    <span>Draw New Topic</span>
-                    <kbd class="hotkey-badge">Alt+T</kbd>
-                  </button>
+                  <div class="topic-draw-buttons-group" id="topicDrawButtonsGroup">
+                    <button id="rerollTopicBtn" class="btn btn-secondary btn-sm reroll-topic-btn" title="Draw New General Topic (Alt+T)" aria-label="Draw New Topic">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <polyline points="1 20 1 14 7 14"></polyline>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                      </svg>
+                      <span>Draw New Topic</span>
+                      <kbd class="hotkey-badge">Alt+T</kbd>
+                    </button>
+
+                    <button id="rerollTechTopicBtn" class="btn btn-secondary btn-sm reroll-topic-btn reroll-tech-btn" title="Draw Professional Tech Workplace Topic (Alt+K)" aria-label="Draw Tech Topic">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                      </svg>
+                      <span>Draw Tech Topic</span>
+                      <kbd class="hotkey-badge">Alt+K</kbd>
+                    </button>
+                  </div>
                 </div>
               </div>
 
