@@ -958,6 +958,23 @@
             </div>
           </div>
 
+          <!-- Chrome file:// Protocol Permanent Permission Notice -->
+          <div id="chromeOriginNotice" class="chrome-origin-notice" style="display: none;">
+            <div class="origin-notice-content">
+              <svg class="origin-notice-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="8" x2="12" y2="12"></line>
+                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+              </svg>
+              <div class="origin-notice-text">
+                <strong>Google Chrome Permission Notice:</strong> You are accessing FluentEdge via <code>file://</code>. Chrome security does not allow saving microphone permissions for local files, causing it to ask on every recording attempt. Open via the local server for <strong>permanent 1-click permission</strong>:
+              </div>
+              <a href="http://localhost:8080/" class="btn btn-emerald btn-sm origin-notice-btn">
+                Open http://localhost:8080 →
+              </a>
+            </div>
+          </div>
+
         <p style="font-size: 13.5px; color: var(--text-secondary); margin-bottom: 16px;">
           Read your written text aloud into your microphone. Our speech recognition engine aligns your spoken words with
           the text in real-time to assess <strong>pronunciation accuracy</strong>, <strong>word stress</strong>, and
@@ -1269,6 +1286,141 @@
           </svg>
           <span id="primaryCopyBtnLabel">Copy Prompt to Clipboard</span>
           <kbd class="hotkey-badge">Enter</kbd>
+        </button>
+      </div>
+    </div>
+  </div>
+  <!-- Individual Word Practice (Repeat-After-Me Drill) Modal -->
+  <div class="word-practice-backdrop" id="wordPracticeModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="wordPracticeModalTitle" style="display: none;">
+    <div class="word-practice-card" id="wordPracticeModalCard">
+      <button id="closeWordPracticeModalBtn" class="btn btn-secondary btn-icon-only word-practice-close" aria-label="Close word practice modal">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+
+      <!-- Header -->
+      <div class="word-practice-header">
+        <div class="word-practice-badge-row">
+          <span class="word-practice-pill" id="wordPracticePill">REPEAT-AFTER-ME DRILL</span>
+          <span class="word-practice-step-pill" id="wordPracticeStepPill">Word 1 of 3</span>
+        </div>
+        <h3 class="word-practice-title" id="wordPracticeModalTitle">Individual Word Pronunciation Practice</h3>
+        <p class="word-practice-desc">
+          Calibrate articulatory precision, syllable stress, and consonant release against the native RP model.
+        </p>
+      </div>
+
+      <!-- Target Word Showcase Card -->
+      <div class="word-practice-showcase">
+        <div class="word-practice-target-row">
+          <span class="word-practice-target-word" id="wordPracticeTargetWord">algorithmic</span>
+          <span class="word-practice-pos-badge" id="wordPracticePosBadge">adjective · C1</span>
+        </div>
+        <div class="word-practice-syllable-wrap">
+          <span class="word-practice-syllable-label">Syllable Stress Guidance:</span>
+          <div class="word-practice-syllables" id="wordPracticeSyllables">
+            <span>al</span> · <span>go</span> · <span class="syllable-stressed">RITH</span> · <span>mic</span>
+          </div>
+        </div>
+        <div class="word-practice-def-box" id="wordPracticeDefBox">
+          <span class="word-practice-def-text" id="wordPracticeDefText">relating to or employing an algorithm or procedural rule</span>
+        </div>
+      </div>
+
+      <!-- Native Model Pronunciation Section -->
+      <div class="word-practice-model-strip">
+        <button id="wordPracticePlayModelBtn" class="btn btn-secondary word-practice-model-btn" title="Listen to native British model pronunciation">
+          <svg class="model-speaker-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+          </svg>
+          <span id="wordPracticeModelBtnLabel">Listen to Native Model</span>
+        </button>
+
+        <div class="word-practice-speed-toggle">
+          <span class="speed-toggle-label">Speed:</span>
+          <button type="button" id="wordPracticeSpeedSlowBtn" class="word-speed-pill" data-speed="0.7">0.7×</button>
+          <button type="button" id="wordPracticeSpeedNormalBtn" class="word-speed-pill active" data-speed="0.85">0.85×</button>
+        </div>
+
+        <span class="word-practice-voice-tag" id="wordPracticeVoiceTag">RP Model Voice</span>
+      </div>
+
+      <!-- Interactive Microphone Drill Section -->
+      <div class="word-practice-drill-box">
+        <button type="button" id="wordPracticeMicBtn" class="word-practice-mic-btn" aria-label="Tap to speak and record pronunciation attempt">
+          <div class="mic-ripple-ring ring-1"></div>
+          <div class="mic-ripple-ring ring-2"></div>
+          <div class="mic-inner-circle">
+            <svg class="mic-main-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+              <path d="M19 10v1a7 7 0 0 1-14 0v-1"></path>
+              <line x1="12" y1="19" x2="12" y2="23"></line>
+              <line x1="8" y1="23" x2="16" y2="23"></line>
+            </svg>
+          </div>
+        </button>
+        <div class="word-practice-mic-status">
+          <div class="word-practice-status-label" id="wordPracticeMicStatusLabel">Tap to Speak (Repeat After Me)</div>
+          <div class="word-practice-status-hint" id="wordPracticeMicStatusHint">Listen to the model above, then pronounce the word clearly into your microphone</div>
+        </div>
+      </div>
+
+      <!-- Real-Time Evaluation Feedback Card -->
+      <div class="word-practice-eval-card" id="wordPracticeEvalCard">
+        <div class="word-practice-eval-header">
+          <div class="word-practice-match-row">
+            <span class="match-caption">Articulatory Accuracy:</span>
+            <span class="word-practice-score-badge status-awaiting" id="wordPracticeScoreBadge">Awaiting Attempt</span>
+          </div>
+          <div class="word-practice-score-pct" id="wordPracticeScorePct">--%</div>
+        </div>
+
+        <!-- Meter Track -->
+        <div class="word-practice-meter-track">
+          <div class="word-practice-meter-fill" id="wordPracticeMeterFill" style="width: 0%;"></div>
+        </div>
+
+        <!-- Phonation Transcript -->
+        <div class="word-practice-transcript-row">
+          <div class="transcript-col">
+            <span class="transcript-col-label">Target Standard:</span>
+            <span class="transcript-target-word" id="wordPracticeTargetDisplay">algorithmic</span>
+          </div>
+          <div class="transcript-col">
+            <span class="transcript-col-label">You Pronounced:</span>
+            <span class="transcript-spoken-word" id="wordPracticeSpokenDisplay">—</span>
+          </div>
+        </div>
+
+        <!-- Diagnostic Feedback Tip -->
+        <div class="word-practice-tip-box" id="wordPracticeTipBox">
+          <svg class="tip-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          <span class="word-practice-feedback-text" id="wordPracticeFeedbackText">
+            Click 'Listen to Native Model' to absorb the syllable stress rhythm, then tap the microphone.
+          </span>
+        </div>
+      </div>
+
+      <!-- Navigation & Summary Footer -->
+      <div class="word-practice-footer">
+        <button type="button" id="wordPracticePrevBtn" class="btn btn-secondary word-practice-nav-btn" disabled>
+          ← Previous
+        </button>
+
+        <div class="word-practice-summary-status">
+          <span id="wordPracticeMasteredSummary">0 of 3 Mastered</span>
+        </div>
+
+        <button type="button" id="wordPracticeNextBtn" class="btn btn-primary word-practice-nav-btn">
+          <span>Next Word →</span>
         </button>
       </div>
     </div>

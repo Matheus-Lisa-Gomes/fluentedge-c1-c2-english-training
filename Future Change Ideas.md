@@ -81,7 +81,7 @@ A working backlog and brainstorm document for upcoming enhancements, architectur
 - [ ] **RP Model Audio Speed Adjustment**: Playback rate selector ($0.8\times$, $1.0\times$, $1.2\times$) for the native British English model reading.
 - [ ] **Audio Recording Playback**: Allow candidates to listen back to their recorded audio alongside the phonetic transcription to pinpoint pronunciation nuances.
 - [ ] **Microphone Input Level Meter**: Add visual gain/clipping indicators to help candidates adjust mic distance before speaking.
-- [ ] **Individual Word Practice**: Interactive repeat-after-me drill for words flagged with phonetic deviations or mispronunciations.
+- [x] **Individual Word Practice**: Interactive repeat-after-me drill for words flagged with phonetic deviations or mispronunciations. *(Completed: Launched from Speaking Report via primary CTA or individual word pill practice buttons. Features native RP model audio playback with speed controls, interactive microphone recording with single-utterance recognition, real-time match percentage meter, syllable breakdown with tonic stress guidance, diagnostic articulatory tips, queue navigation, and report-level mastered badge tracking)*
 
 ---
 

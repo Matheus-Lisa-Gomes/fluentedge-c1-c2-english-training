@@ -116,6 +116,7 @@ export class SpeechEngine {
     this.onVoiceChange = null;
     this.onComplete = null;
     this._autoStopTimer = null;
+    this.singleWordRecognition = null;
 
     this.initRecognition();
   }
@@ -1259,6 +1260,10 @@ export class SpeechEngine {
     if (this.isListening) return;
 
     try {
+      // Warm up/retain media stream so Chrome maintains the tab's microphone permission context
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        this.ensureMediaStream().catch(() => {});
+      }
       if (!this.recognition) {
         this.initRecognition();
       }
@@ -1924,12 +1929,299 @@ export class SpeechEngine {
       }
     }
   }
+
+  // ================================================================
+  // INDIVIDUAL WORD PRACTICE (REPEAT-AFTER-ME DRILL)
+  // ================================================================
+
+  /**
+   * Single-word repeat-after-me speech evaluation
+   * Uses non-continuous SpeechRecognition with multi-alternative beam decoding
+   * and phoneme deviation analysis.
+   *
+   * @param {string} targetWord - The target vocabulary word to practice
+   * @param {Object} [options]
+   * @param {Function} [options.onListening] - Called when mic starts listening
+   * @param {Function} [options.onInterim] - Called with interim spoken transcript
+   * @param {Function} [options.onResult] - Called with evaluation result object
+   * @param {Function} [options.onError] - Called with error description string
+   * @param {Function} [options.onEnd] - Called when recognition completes
+   * @returns {Object|null} Controller with stop() and abort()
+   */
+  evaluateSingleWordPronunciation(targetWord, options = {}) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      if (options.onError) {
+        options.onError("Speech recognition is not supported in this browser. Please use Google Chrome or Microsoft Edge.");
+      }
+      return null;
+    }
+
+    const cleanTarget = (targetWord || '').toLowerCase().trim().replace(/[^a-z]/g, '');
+    if (!cleanTarget) {
+      if (options.onError) options.onError("Invalid word for pronunciation practice.");
+      return null;
+    }
+
+    // Stop continuous reading session if running
+    if (this.isListening) {
+      this.stopListening();
+    }
+
+    // Abort existing single word drill if running
+    this.stopSingleWordPronunciation();
+
+    // Warm up/retain media stream so Chrome maintains the tab's microphone permission context
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      this.ensureMediaStream().catch(() => {});
+    }
+
+    const recognition = new SpeechRecognition();
+    this.singleWordRecognition = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 5;
+    recognition.lang = this.currentAccent === 'uk' ? 'en-GB' : 'en-US';
+
+    let hasReceivedResult = false;
+    let safetyTimeout = null;
+
+    const cleanup = () => {
+      if (safetyTimeout) {
+        clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+      if (this.singleWordRecognition === recognition) {
+        this.singleWordRecognition = null;
+      }
+      // Keep stream handle alive, but mute tracks while idle so browser indicator turns off
+      if (this.mediaStream && this.mediaStream.active) {
+        this.mediaStream.getAudioTracks().forEach(track => { track.enabled = false; });
+      }
+    };
+
+    recognition.onstart = () => {
+      if (this.mediaStream && this.mediaStream.active) {
+        this.mediaStream.getAudioTracks().forEach(track => { track.enabled = true; });
+      }
+      if (options.onListening) options.onListening();
+      // Safety auto-stop after 7.5 seconds if user stays silent
+      safetyTimeout = setTimeout(() => {
+        try {
+          recognition.stop();
+        } catch (_) {}
+      }, 7500);
+    };
+
+    recognition.onresult = (event) => {
+      let bestSimilarity = 0;
+      let bestSpokenWord = '';
+      const allHypotheses = [];
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        for (let alt = 0; alt < res.length; alt++) {
+          const hypText = (res[alt].transcript || '').trim();
+          if (!hypText) continue;
+          allHypotheses.push(hypText);
+
+          const cleanHyp = hypText.toLowerCase().replace(/[^a-z\s]/g, '').trim();
+          // 1. Direct whole-string similarity
+          const simDirect = calculateWordSimilarity(cleanTarget, cleanHyp);
+          if (simDirect > bestSimilarity) {
+            bestSimilarity = simDirect;
+            bestSpokenWord = cleanHyp;
+          }
+
+          // 2. If multi-word utterance (e.g. "the algorithm"), match individual words
+          const tokens = cleanHyp.split(/\s+/).filter(Boolean);
+          for (const token of tokens) {
+            const tokenSim = calculateWordSimilarity(cleanTarget, token);
+            if (tokenSim > bestSimilarity) {
+              bestSimilarity = tokenSim;
+              bestSpokenWord = token;
+            }
+          }
+        }
+      }
+
+      if (event.results[0] && event.results[0].isFinal) {
+        hasReceivedResult = true;
+        const similarityPct = Math.round(bestSimilarity * 100);
+        const isMastered = similarityPct >= 82;
+
+        let status = 'deviated';
+        let feedback = '';
+
+        const phonetics = getWordSyllableAndStress(cleanTarget);
+        const stressedSyl = phonetics.syllables[phonetics.stressedIdx] || cleanTarget;
+
+        if (similarityPct >= 95) {
+          status = 'mastered';
+          feedback = `Outstanding RP articulation! Flawless vowel resonance and crisp consonant release.`;
+        } else if (isMastered) {
+          status = 'mastered';
+          feedback = `Target standard achieved (${similarityPct}% match)! Syllable stress on "${stressedSyl.toUpperCase()}" aligns with native model cadence.`;
+        } else if (similarityPct >= 60) {
+          status = 'close';
+          if (cleanTarget.endsWith('s') || cleanTarget.endsWith('ts') || cleanTarget.endsWith('kts') || cleanTarget.endsWith('ed')) {
+            feedback = `Close attempt (${similarityPct}%). Ensure full release of the final consonant cluster without swallowing the coda.`;
+          } else {
+            feedback = `Close attempt (${similarityPct}%). Emphasize tonic syllable "${stressedSyl.toUpperCase()}" and keep unstressed vowels neutral.`;
+          }
+        } else {
+          status = 'deviated';
+          feedback = `Phonetic divergence detected (recognized: "${bestSpokenWord || 'unclear'}"). Listen to the model voice, calibrate syllable cadence, and repeat.`;
+        }
+
+        if (options.onResult) {
+          options.onResult({
+            targetWord: cleanTarget,
+            spokenWord: bestSpokenWord || (allHypotheses[0] || ''),
+            similarity: bestSimilarity,
+            similarityPct,
+            isMastered,
+            status,
+            feedback,
+            allHypotheses,
+            phonetics
+          });
+        }
+      } else if (options.onInterim) {
+        options.onInterim(allHypotheses[0] || '');
+      }
+    };
+
+    recognition.onerror = (event) => {
+      cleanup();
+      console.warn("[SpeechEngine] Single word recognition error:", event.error);
+      if (event.error === 'no-speech') {
+        if (!hasReceivedResult && options.onError) {
+          options.onError("No speech was detected. Tap the microphone and repeat the word clearly.");
+        }
+      } else if (event.error === 'not-allowed') {
+        if (options.onError) {
+          options.onError("Microphone permission was denied. Please allow microphone access to practice.");
+        }
+      } else if (event.error === 'aborted') {
+        // Aborted cleanly by user or timer
+      } else {
+        if (options.onError) {
+          options.onError(`Audio recognition notice (${event.error}). Please try again.`);
+        }
+      }
+    };
+
+    recognition.onend = () => {
+      cleanup();
+      if (options.onEnd) options.onEnd();
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      cleanup();
+      if (options.onError) options.onError("Could not initialize microphone. Please try again.");
+    }
+
+    return {
+      stop: () => {
+        try { recognition.stop(); } catch (_) {}
+        cleanup();
+      },
+      abort: () => {
+        try { recognition.abort(); } catch (_) {}
+        cleanup();
+      }
+    };
+  }
+
+  /**
+   * Stop any active single-word pronunciation recording immediately
+   */
+  stopSingleWordPronunciation() {
+    if (this.singleWordRecognition) {
+      try {
+        this.singleWordRecognition.abort();
+      } catch (_) {}
+      this.singleWordRecognition = null;
+    }
+  }
+
+  /**
+   * Helper to retrieve syllable & stress information for a given word
+   */
+  getWordSyllableAndStress(word) {
+    return getWordSyllableAndStress(word);
+  }
 }
+
+// ================================================================
+// PHONETIC & ARTICULATORY HELPERS
+// ================================================================
+
+/**
+ * Curated C1/C2 vocabulary phonetic dictionary with exact syllabification
+ * and tonic primary stress index.
+ */
+const KNOWN_WORD_PHONETICS = {
+  'algorithmic': { syllables: ['al', 'go', 'rith', 'mic'], stressedIdx: 2 },
+  'paradigm': { syllables: ['par', 'a', 'digm'], stressedIdx: 0 },
+  'paradigms': { syllables: ['par', 'a', 'digms'], stressedIdx: 0 },
+  'ubiquitous': { syllables: ['u', 'biq', 'ui', 'tous'], stressedIdx: 1 },
+  'juxtaposition': { syllables: ['jux', 'ta', 'po', 'si', 'tion'], stressedIdx: 3 },
+  'proliferation': { syllables: ['pro', 'lif', 'er', 'a', 'tion'], stressedIdx: 3 },
+  'concomitant': { syllables: ['con', 'com', 'i', 'tant'], stressedIdx: 1 },
+  'dichotomy': { syllables: ['di', 'chot', 'o', 'my'], stressedIdx: 1 },
+  'ameliorate': { syllables: ['a', 'mel', 'io', 'rate'], stressedIdx: 1 },
+  'ameliorating': { syllables: ['a', 'mel', 'io', 'rat', 'ing'], stressedIdx: 1 },
+  'mitigate': { syllables: ['mit', 'i', 'gate'], stressedIdx: 0 },
+  'mitigating': { syllables: ['mit', 'i', 'gat', 'ing'], stressedIdx: 0 },
+  'pervasive': { syllables: ['per', 'va', 'sive'], stressedIdx: 1 },
+  'hegemony': { syllables: ['he', 'gem', 'o', 'ny'], stressedIdx: 1 },
+  'quintessential': { syllables: ['quin', 'tes', 'sen', 'tial'], stressedIdx: 2 },
+  'ephemeral': { syllables: ['e', 'phem', 'er', 'al'], stressedIdx: 1 },
+  'surreptitious': { syllables: ['sur', 'rep', 'ti', 'tious'], stressedIdx: 2 },
+  'inexorable': { syllables: ['in', 'ex', 'or', 'a', 'ble'], stressedIdx: 1 },
+  'pernicious': { syllables: ['per', 'ni', 'cious'], stressedIdx: 1 },
+  'equivocal': { syllables: ['e', 'quiv', 'o', 'cal'], stressedIdx: 1 },
+  'anomalous': { syllables: ['a', 'nom', 'a', 'lous'], stressedIdx: 1 },
+  'esoteric': { syllables: ['es', 'o', 'ter', 'ic'], stressedIdx: 2 },
+  'recalcitrant': { syllables: ['re', 'cal', 'ci', 'trant'], stressedIdx: 1 },
+  'cacophony': { syllables: ['ca', 'coph', 'o', 'ny'], stressedIdx: 1 },
+  'enervate': { syllables: ['en', 'er', 'vate'], stressedIdx: 0 },
+  'obfuscate': { syllables: ['ob', 'fus', 'cate'], stressedIdx: 0 },
+  'substantiate': { syllables: ['sub', 'stan', 'ti', 'ate'], stressedIdx: 1 },
+  'disparate': { syllables: ['dis', 'pa', 'rate'], stressedIdx: 0 },
+  'disseminate': { syllables: ['dis', 'sem', 'i', 'nate'], stressedIdx: 1 },
+  'salient': { syllables: ['sa', 'li', 'ent'], stressedIdx: 0 },
+  'deleterious': { syllables: ['del', 'e', 'te', 'ri', 'ous'], stressedIdx: 2 },
+  'pragmatic': { syllables: ['prag', 'mat', 'ic'], stressedIdx: 1 },
+  'stringent': { syllables: ['strin', 'gent'], stressedIdx: 0 },
+  'tenuous': { syllables: ['ten', 'u', 'ous'], stressedIdx: 0 },
+  'unprecedented': { syllables: ['un', 'prec', 'e', 'den', 'ted'], stressedIdx: 1 },
+  'infrastructure': { syllables: ['in', 'fra', 'struc', 'ture'], stressedIdx: 0 },
+  'subversive': { syllables: ['sub', 'ver', 'sive'], stressedIdx: 1 },
+  'syntactic': { syllables: ['syn', 'tac', 'tic'], stressedIdx: 1 },
+  'catenation': { syllables: ['cat', 'e', 'na', 'tion'], stressedIdx: 2 },
+  'cadence': { syllables: ['ca', 'dence'], stressedIdx: 0 },
+  'intelligibility': { syllables: ['in', 'tel', 'li', 'gi', 'bil', 'i', 'ty'], stressedIdx: 4 },
+  'articulation': { syllables: ['ar', 'tic', 'u', 'la', 'tion'], stressedIdx: 3 },
+  'monolithic': { syllables: ['mon', 'o', 'lith', 'ic'], stressedIdx: 2 },
+  'disillusioned': { syllables: ['dis', 'il', 'lu', 'sioned'], stressedIdx: 2 },
+  'counterproductive': { syllables: ['coun', 'ter', 'pro', 'duc', 'tive'], stressedIdx: 3 },
+  'circumlocution': { syllables: ['cir', 'cum', 'lo', 'cu', 'tion'], stressedIdx: 3 },
+  'ostracize': { syllables: ['os', 'tra', 'cize'], stressedIdx: 0 },
+  'veracity': { syllables: ['ve', 'rac', 'i', 'ty'], stressedIdx: 1 },
+  'propensity': { syllables: ['pro', 'pen', 'si', 'ty'], stressedIdx: 1 },
+  'idiosyncratic': { syllables: ['id', 'i', 'o', 'syn', 'crat', 'ic'], stressedIdx: 4 },
+  'subjugate': { syllables: ['sub', 'ju', 'gate'], stressedIdx: 0 }
+};
 
 /**
  * Word similarity calculation using normalized Levenshtein distance
  */
-function calculateWordSimilarity(s1, s2) {
+export function calculateWordSimilarity(s1, s2) {
   if (s1 === s2) return 1.0;
   if (!s1 || !s2) return 0.0;
 
@@ -1945,7 +2237,7 @@ function calculateWordSimilarity(s1, s2) {
   return 1 - (distance / maxLength);
 }
 
-function levenshteinDistance(a, b) {
+export function levenshteinDistance(a, b) {
   const matrix = [];
   for (let i = 0; i <= b.length; i++) {
     matrix[i] = [i];
@@ -1968,3 +2260,158 @@ function levenshteinDistance(a, b) {
   }
   return matrix[b.length][a.length];
 }
+
+/**
+ * Deconstructs an English word into syllables and determines the primary tonic stress
+ * @param {string} rawWord - The word to syllabify
+ * @returns {Object} Syllable breakdown with formatted text and HTML
+ */
+export function getWordSyllableAndStress(rawWord) {
+  if (!rawWord || typeof rawWord !== 'string') {
+    return {
+      word: '',
+      syllables: [],
+      stressedIdx: 0,
+      formattedText: '',
+      formattedHtml: ''
+    };
+  }
+
+  const clean = rawWord.toLowerCase().trim().replace(/[^a-z]/g, '');
+  if (!clean) {
+    return {
+      word: rawWord,
+      syllables: [rawWord],
+      stressedIdx: 0,
+      formattedText: rawWord,
+      formattedHtml: rawWord
+    };
+  }
+
+  // 1. Check known C1/C2 phonetic dictionary
+  if (KNOWN_WORD_PHONETICS[clean]) {
+    const item = KNOWN_WORD_PHONETICS[clean];
+    const sIdx = Math.min(item.stressedIdx, item.syllables.length - 1);
+    const textPieces = item.syllables.map((s, idx) => idx === sIdx ? s.toUpperCase() : s);
+    const htmlPieces = item.syllables.map((s, idx) =>
+      idx === sIdx
+        ? `<span class="syllable-stressed" title="Primary Tonic Stress">${s.toUpperCase()}</span>`
+        : `<span class="syllable-unstressed">${s}</span>`
+    );
+    return {
+      word: clean,
+      syllables: item.syllables,
+      stressedIdx: sIdx,
+      formattedText: textPieces.join(' · '),
+      formattedHtml: htmlPieces.join(' · ')
+    };
+  }
+
+  // 2. Algorithmic syllabification for any arbitrary English word
+  const syllables = algorithmicSyllabify(clean);
+  const stressedIdx = determineStressedSyllable(clean, syllables);
+
+  const textPieces = syllables.map((s, idx) => idx === stressedIdx ? s.toUpperCase() : s);
+  const htmlPieces = syllables.map((s, idx) =>
+    idx === stressedIdx
+      ? `<span class="syllable-stressed" title="Primary Tonic Stress">${s.toUpperCase()}</span>`
+      : `<span class="syllable-unstressed">${s}</span>`
+  );
+
+  return {
+    word: clean,
+    syllables,
+    stressedIdx,
+    formattedText: textPieces.join(' · '),
+    formattedHtml: htmlPieces.join(' · ')
+  };
+}
+
+/**
+ * Algorithmic English syllabification based on vowel nuclei and maximal onset
+ */
+function algorithmicSyllabify(word) {
+  if (word.length <= 3) return [word];
+
+  const isVowel = (c) => /[aeiouy]/i.test(c);
+  const vowels = [];
+  let inVowelGroup = false;
+
+  for (let i = 0; i < word.length; i++) {
+    // Treat silent terminal 'e' (unless only vowel or ending in '-le')
+    if (i === word.length - 1 && word[i] === 'e' && vowels.length > 0 && word[i - 1] !== 'l') {
+      continue;
+    }
+    if (isVowel(word[i])) {
+      if (!inVowelGroup) {
+        vowels.push(i);
+        inVowelGroup = true;
+      }
+    } else {
+      inVowelGroup = false;
+    }
+  }
+
+  if (vowels.length <= 1) return [word];
+
+  const cuts = [];
+  for (let v = 0; v < vowels.length - 1; v++) {
+    const v1 = vowels[v];
+    const v2 = vowels[v + 1];
+    const consCount = v2 - (v1 + 1);
+
+    if (consCount <= 0) {
+      // Vowel hiatus (e.g. di-et)
+      cuts.push(v1 + 1);
+    } else if (consCount === 1) {
+      // Single consonant: goes with second syllable (V-CV)
+      cuts.push(v1 + 1);
+    } else if (consCount === 2) {
+      // Two consonants: split between them (VC-CV)
+      cuts.push(v1 + 2);
+    } else {
+      // 3+ consonants: keep first with coda, rest with onset
+      cuts.push(v1 + 2);
+    }
+  }
+
+  const result = [];
+  let start = 0;
+  for (const cut of cuts) {
+    if (cut > start && cut < word.length) {
+      result.push(word.slice(start, cut));
+      start = cut;
+    }
+  }
+  if (start < word.length) {
+    result.push(word.slice(start));
+  }
+  return result.length > 0 ? result : [word];
+}
+
+/**
+ * Determines the primary stressed syllable index using English phonotactic suffix heuristics
+ */
+function determineStressedSyllable(word, syllables) {
+  const len = syllables.length;
+  if (len <= 1) return 0;
+  if (len === 2) {
+    if (/(?:ceive|fer|mit|pel|vide|press|voke)$/.test(word)) return 1;
+    return 0; // Default 2-syllable noun/adj stress on 1st
+  }
+  // Suffixes with penultimate stress (stress on syllable immediately preceding suffix):
+  if (/(?:tion|sion|ic|ical|ity|ious|ian)$/.test(word)) {
+    return Math.max(0, len - 2);
+  }
+  // Suffixes with antepenultimate stress (3rd from end):
+  if (/(?:ate|ize|ise|ous|ment|able|al|y)$/.test(word)) {
+    return Math.max(0, len - 3);
+  }
+  // Polysyllabic general rule: penultimate or antepenultimate
+  return Math.max(0, len - 2);
+}
+
+// Attach static helpers
+SpeechEngine.calculateWordSimilarity = calculateWordSimilarity;
+SpeechEngine.getWordSyllableAndStress = getWordSyllableAndStress;
+SpeechEngine.levenshteinDistance = levenshteinDistance;

@@ -28,6 +28,8 @@ $evaluatorClean = $evaluatorClean -replace '(?m)^\s*export\s+function\s+', 'func
 
 # 4. Speech
 $speechClean = $speechContent -replace '(?m)^\s*export\s+class\s+', 'class '
+$speechClean = $speechClean -replace '(?m)^\s*export\s+function\s+', 'function '
+$speechClean = $speechClean -replace '(?m)^\s*export\s*\{[^}]+\};\s*\r?\n', ''
 
 # 5. App
 $appClean = $appContent -replace '(?m)^\s*import\s+[^;]+;\s*\r?\n', ''

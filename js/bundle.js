@@ -15836,6 +15836,7 @@ class SpeechEngine {
     this.onVoiceChange = null;
     this.onComplete = null;
     this._autoStopTimer = null;
+    this.singleWordRecognition = null;
 
     this.initRecognition();
   }
@@ -16979,6 +16980,10 @@ class SpeechEngine {
     if (this.isListening) return;
 
     try {
+      // Warm up/retain media stream so Chrome maintains the tab's microphone permission context
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        this.ensureMediaStream().catch(() => {});
+      }
       if (!this.recognition) {
         this.initRecognition();
       }
@@ -17644,7 +17649,294 @@ class SpeechEngine {
       }
     }
   }
+
+  // ================================================================
+  // INDIVIDUAL WORD PRACTICE (REPEAT-AFTER-ME DRILL)
+  // ================================================================
+
+  /**
+   * Single-word repeat-after-me speech evaluation
+   * Uses non-continuous SpeechRecognition with multi-alternative beam decoding
+   * and phoneme deviation analysis.
+   *
+   * @param {string} targetWord - The target vocabulary word to practice
+   * @param {Object} [options]
+   * @param {Function} [options.onListening] - Called when mic starts listening
+   * @param {Function} [options.onInterim] - Called with interim spoken transcript
+   * @param {Function} [options.onResult] - Called with evaluation result object
+   * @param {Function} [options.onError] - Called with error description string
+   * @param {Function} [options.onEnd] - Called when recognition completes
+   * @returns {Object|null} Controller with stop() and abort()
+   */
+  evaluateSingleWordPronunciation(targetWord, options = {}) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      if (options.onError) {
+        options.onError("Speech recognition is not supported in this browser. Please use Google Chrome or Microsoft Edge.");
+      }
+      return null;
+    }
+
+    const cleanTarget = (targetWord || '').toLowerCase().trim().replace(/[^a-z]/g, '');
+    if (!cleanTarget) {
+      if (options.onError) options.onError("Invalid word for pronunciation practice.");
+      return null;
+    }
+
+    // Stop continuous reading session if running
+    if (this.isListening) {
+      this.stopListening();
+    }
+
+    // Abort existing single word drill if running
+    this.stopSingleWordPronunciation();
+
+    // Warm up/retain media stream so Chrome maintains the tab's microphone permission context
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      this.ensureMediaStream().catch(() => {});
+    }
+
+    const recognition = new SpeechRecognition();
+    this.singleWordRecognition = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.maxAlternatives = 5;
+    recognition.lang = this.currentAccent === 'uk' ? 'en-GB' : 'en-US';
+
+    let hasReceivedResult = false;
+    let safetyTimeout = null;
+
+    const cleanup = () => {
+      if (safetyTimeout) {
+        clearTimeout(safetyTimeout);
+        safetyTimeout = null;
+      }
+      if (this.singleWordRecognition === recognition) {
+        this.singleWordRecognition = null;
+      }
+      // Keep stream handle alive, but mute tracks while idle so browser indicator turns off
+      if (this.mediaStream && this.mediaStream.active) {
+        this.mediaStream.getAudioTracks().forEach(track => { track.enabled = false; });
+      }
+    };
+
+    recognition.onstart = () => {
+      if (this.mediaStream && this.mediaStream.active) {
+        this.mediaStream.getAudioTracks().forEach(track => { track.enabled = true; });
+      }
+      if (options.onListening) options.onListening();
+      // Safety auto-stop after 7.5 seconds if user stays silent
+      safetyTimeout = setTimeout(() => {
+        try {
+          recognition.stop();
+        } catch (_) {}
+      }, 7500);
+    };
+
+    recognition.onresult = (event) => {
+      let bestSimilarity = 0;
+      let bestSpokenWord = '';
+      const allHypotheses = [];
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const res = event.results[i];
+        for (let alt = 0; alt < res.length; alt++) {
+          const hypText = (res[alt].transcript || '').trim();
+          if (!hypText) continue;
+          allHypotheses.push(hypText);
+
+          const cleanHyp = hypText.toLowerCase().replace(/[^a-z\s]/g, '').trim();
+          // 1. Direct whole-string similarity
+          const simDirect = calculateWordSimilarity(cleanTarget, cleanHyp);
+          if (simDirect > bestSimilarity) {
+            bestSimilarity = simDirect;
+            bestSpokenWord = cleanHyp;
+          }
+
+          // 2. If multi-word utterance (e.g. "the algorithm"), match individual words
+          const tokens = cleanHyp.split(/\s+/).filter(Boolean);
+          for (const token of tokens) {
+            const tokenSim = calculateWordSimilarity(cleanTarget, token);
+            if (tokenSim > bestSimilarity) {
+              bestSimilarity = tokenSim;
+              bestSpokenWord = token;
+            }
+          }
+        }
+      }
+
+      if (event.results[0] && event.results[0].isFinal) {
+        hasReceivedResult = true;
+        const similarityPct = Math.round(bestSimilarity * 100);
+        const isMastered = similarityPct >= 82;
+
+        let status = 'deviated';
+        let feedback = '';
+
+        const phonetics = getWordSyllableAndStress(cleanTarget);
+        const stressedSyl = phonetics.syllables[phonetics.stressedIdx] || cleanTarget;
+
+        if (similarityPct >= 95) {
+          status = 'mastered';
+          feedback = `Outstanding RP articulation! Flawless vowel resonance and crisp consonant release.`;
+        } else if (isMastered) {
+          status = 'mastered';
+          feedback = `Target standard achieved (${similarityPct}% match)! Syllable stress on "${stressedSyl.toUpperCase()}" aligns with native model cadence.`;
+        } else if (similarityPct >= 60) {
+          status = 'close';
+          if (cleanTarget.endsWith('s') || cleanTarget.endsWith('ts') || cleanTarget.endsWith('kts') || cleanTarget.endsWith('ed')) {
+            feedback = `Close attempt (${similarityPct}%). Ensure full release of the final consonant cluster without swallowing the coda.`;
+          } else {
+            feedback = `Close attempt (${similarityPct}%). Emphasize tonic syllable "${stressedSyl.toUpperCase()}" and keep unstressed vowels neutral.`;
+          }
+        } else {
+          status = 'deviated';
+          feedback = `Phonetic divergence detected (recognized: "${bestSpokenWord || 'unclear'}"). Listen to the model voice, calibrate syllable cadence, and repeat.`;
+        }
+
+        if (options.onResult) {
+          options.onResult({
+            targetWord: cleanTarget,
+            spokenWord: bestSpokenWord || (allHypotheses[0] || ''),
+            similarity: bestSimilarity,
+            similarityPct,
+            isMastered,
+            status,
+            feedback,
+            allHypotheses,
+            phonetics
+          });
+        }
+      } else if (options.onInterim) {
+        options.onInterim(allHypotheses[0] || '');
+      }
+    };
+
+    recognition.onerror = (event) => {
+      cleanup();
+      console.warn("[SpeechEngine] Single word recognition error:", event.error);
+      if (event.error === 'no-speech') {
+        if (!hasReceivedResult && options.onError) {
+          options.onError("No speech was detected. Tap the microphone and repeat the word clearly.");
+        }
+      } else if (event.error === 'not-allowed') {
+        if (options.onError) {
+          options.onError("Microphone permission was denied. Please allow microphone access to practice.");
+        }
+      } else if (event.error === 'aborted') {
+        // Aborted cleanly by user or timer
+      } else {
+        if (options.onError) {
+          options.onError(`Audio recognition notice (${event.error}). Please try again.`);
+        }
+      }
+    };
+
+    recognition.onend = () => {
+      cleanup();
+      if (options.onEnd) options.onEnd();
+    };
+
+    try {
+      recognition.start();
+    } catch (err) {
+      cleanup();
+      if (options.onError) options.onError("Could not initialize microphone. Please try again.");
+    }
+
+    return {
+      stop: () => {
+        try { recognition.stop(); } catch (_) {}
+        cleanup();
+      },
+      abort: () => {
+        try { recognition.abort(); } catch (_) {}
+        cleanup();
+      }
+    };
+  }
+
+  /**
+   * Stop any active single-word pronunciation recording immediately
+   */
+  stopSingleWordPronunciation() {
+    if (this.singleWordRecognition) {
+      try {
+        this.singleWordRecognition.abort();
+      } catch (_) {}
+      this.singleWordRecognition = null;
+    }
+  }
+
+  /**
+   * Helper to retrieve syllable & stress information for a given word
+   */
+  getWordSyllableAndStress(word) {
+    return getWordSyllableAndStress(word);
+  }
 }
+
+// ================================================================
+// PHONETIC & ARTICULATORY HELPERS
+// ================================================================
+
+/**
+ * Curated C1/C2 vocabulary phonetic dictionary with exact syllabification
+ * and tonic primary stress index.
+ */
+const KNOWN_WORD_PHONETICS = {
+  'algorithmic': { syllables: ['al', 'go', 'rith', 'mic'], stressedIdx: 2 },
+  'paradigm': { syllables: ['par', 'a', 'digm'], stressedIdx: 0 },
+  'paradigms': { syllables: ['par', 'a', 'digms'], stressedIdx: 0 },
+  'ubiquitous': { syllables: ['u', 'biq', 'ui', 'tous'], stressedIdx: 1 },
+  'juxtaposition': { syllables: ['jux', 'ta', 'po', 'si', 'tion'], stressedIdx: 3 },
+  'proliferation': { syllables: ['pro', 'lif', 'er', 'a', 'tion'], stressedIdx: 3 },
+  'concomitant': { syllables: ['con', 'com', 'i', 'tant'], stressedIdx: 1 },
+  'dichotomy': { syllables: ['di', 'chot', 'o', 'my'], stressedIdx: 1 },
+  'ameliorate': { syllables: ['a', 'mel', 'io', 'rate'], stressedIdx: 1 },
+  'ameliorating': { syllables: ['a', 'mel', 'io', 'rat', 'ing'], stressedIdx: 1 },
+  'mitigate': { syllables: ['mit', 'i', 'gate'], stressedIdx: 0 },
+  'mitigating': { syllables: ['mit', 'i', 'gat', 'ing'], stressedIdx: 0 },
+  'pervasive': { syllables: ['per', 'va', 'sive'], stressedIdx: 1 },
+  'hegemony': { syllables: ['he', 'gem', 'o', 'ny'], stressedIdx: 1 },
+  'quintessential': { syllables: ['quin', 'tes', 'sen', 'tial'], stressedIdx: 2 },
+  'ephemeral': { syllables: ['e', 'phem', 'er', 'al'], stressedIdx: 1 },
+  'surreptitious': { syllables: ['sur', 'rep', 'ti', 'tious'], stressedIdx: 2 },
+  'inexorable': { syllables: ['in', 'ex', 'or', 'a', 'ble'], stressedIdx: 1 },
+  'pernicious': { syllables: ['per', 'ni', 'cious'], stressedIdx: 1 },
+  'equivocal': { syllables: ['e', 'quiv', 'o', 'cal'], stressedIdx: 1 },
+  'anomalous': { syllables: ['a', 'nom', 'a', 'lous'], stressedIdx: 1 },
+  'esoteric': { syllables: ['es', 'o', 'ter', 'ic'], stressedIdx: 2 },
+  'recalcitrant': { syllables: ['re', 'cal', 'ci', 'trant'], stressedIdx: 1 },
+  'cacophony': { syllables: ['ca', 'coph', 'o', 'ny'], stressedIdx: 1 },
+  'enervate': { syllables: ['en', 'er', 'vate'], stressedIdx: 0 },
+  'obfuscate': { syllables: ['ob', 'fus', 'cate'], stressedIdx: 0 },
+  'substantiate': { syllables: ['sub', 'stan', 'ti', 'ate'], stressedIdx: 1 },
+  'disparate': { syllables: ['dis', 'pa', 'rate'], stressedIdx: 0 },
+  'disseminate': { syllables: ['dis', 'sem', 'i', 'nate'], stressedIdx: 1 },
+  'salient': { syllables: ['sa', 'li', 'ent'], stressedIdx: 0 },
+  'deleterious': { syllables: ['del', 'e', 'te', 'ri', 'ous'], stressedIdx: 2 },
+  'pragmatic': { syllables: ['prag', 'mat', 'ic'], stressedIdx: 1 },
+  'stringent': { syllables: ['strin', 'gent'], stressedIdx: 0 },
+  'tenuous': { syllables: ['ten', 'u', 'ous'], stressedIdx: 0 },
+  'unprecedented': { syllables: ['un', 'prec', 'e', 'den', 'ted'], stressedIdx: 1 },
+  'infrastructure': { syllables: ['in', 'fra', 'struc', 'ture'], stressedIdx: 0 },
+  'subversive': { syllables: ['sub', 'ver', 'sive'], stressedIdx: 1 },
+  'syntactic': { syllables: ['syn', 'tac', 'tic'], stressedIdx: 1 },
+  'catenation': { syllables: ['cat', 'e', 'na', 'tion'], stressedIdx: 2 },
+  'cadence': { syllables: ['ca', 'dence'], stressedIdx: 0 },
+  'intelligibility': { syllables: ['in', 'tel', 'li', 'gi', 'bil', 'i', 'ty'], stressedIdx: 4 },
+  'articulation': { syllables: ['ar', 'tic', 'u', 'la', 'tion'], stressedIdx: 3 },
+  'monolithic': { syllables: ['mon', 'o', 'lith', 'ic'], stressedIdx: 2 },
+  'disillusioned': { syllables: ['dis', 'il', 'lu', 'sioned'], stressedIdx: 2 },
+  'counterproductive': { syllables: ['coun', 'ter', 'pro', 'duc', 'tive'], stressedIdx: 3 },
+  'circumlocution': { syllables: ['cir', 'cum', 'lo', 'cu', 'tion'], stressedIdx: 3 },
+  'ostracize': { syllables: ['os', 'tra', 'cize'], stressedIdx: 0 },
+  'veracity': { syllables: ['ve', 'rac', 'i', 'ty'], stressedIdx: 1 },
+  'propensity': { syllables: ['pro', 'pen', 'si', 'ty'], stressedIdx: 1 },
+  'idiosyncratic': { syllables: ['id', 'i', 'o', 'syn', 'crat', 'ic'], stressedIdx: 4 },
+  'subjugate': { syllables: ['sub', 'ju', 'gate'], stressedIdx: 0 }
+};
 
 /**
  * Word similarity calculation using normalized Levenshtein distance
@@ -17664,7 +17956,6 @@ function calculateWordSimilarity(s1, s2) {
   const maxLength = Math.max(s1.length, s2.length);
   return 1 - (distance / maxLength);
 }
-
 function levenshteinDistance(a, b) {
   const matrix = [];
   for (let i = 0; i <= b.length; i++) {
@@ -17688,6 +17979,161 @@ function levenshteinDistance(a, b) {
   }
   return matrix[b.length][a.length];
 }
+
+/**
+ * Deconstructs an English word into syllables and determines the primary tonic stress
+ * @param {string} rawWord - The word to syllabify
+ * @returns {Object} Syllable breakdown with formatted text and HTML
+ */
+function getWordSyllableAndStress(rawWord) {
+  if (!rawWord || typeof rawWord !== 'string') {
+    return {
+      word: '',
+      syllables: [],
+      stressedIdx: 0,
+      formattedText: '',
+      formattedHtml: ''
+    };
+  }
+
+  const clean = rawWord.toLowerCase().trim().replace(/[^a-z]/g, '');
+  if (!clean) {
+    return {
+      word: rawWord,
+      syllables: [rawWord],
+      stressedIdx: 0,
+      formattedText: rawWord,
+      formattedHtml: rawWord
+    };
+  }
+
+  // 1. Check known C1/C2 phonetic dictionary
+  if (KNOWN_WORD_PHONETICS[clean]) {
+    const item = KNOWN_WORD_PHONETICS[clean];
+    const sIdx = Math.min(item.stressedIdx, item.syllables.length - 1);
+    const textPieces = item.syllables.map((s, idx) => idx === sIdx ? s.toUpperCase() : s);
+    const htmlPieces = item.syllables.map((s, idx) =>
+      idx === sIdx
+        ? `<span class="syllable-stressed" title="Primary Tonic Stress">${s.toUpperCase()}</span>`
+        : `<span class="syllable-unstressed">${s}</span>`
+    );
+    return {
+      word: clean,
+      syllables: item.syllables,
+      stressedIdx: sIdx,
+      formattedText: textPieces.join(' · '),
+      formattedHtml: htmlPieces.join(' · ')
+    };
+  }
+
+  // 2. Algorithmic syllabification for any arbitrary English word
+  const syllables = algorithmicSyllabify(clean);
+  const stressedIdx = determineStressedSyllable(clean, syllables);
+
+  const textPieces = syllables.map((s, idx) => idx === stressedIdx ? s.toUpperCase() : s);
+  const htmlPieces = syllables.map((s, idx) =>
+    idx === stressedIdx
+      ? `<span class="syllable-stressed" title="Primary Tonic Stress">${s.toUpperCase()}</span>`
+      : `<span class="syllable-unstressed">${s}</span>`
+  );
+
+  return {
+    word: clean,
+    syllables,
+    stressedIdx,
+    formattedText: textPieces.join(' · '),
+    formattedHtml: htmlPieces.join(' · ')
+  };
+}
+
+/**
+ * Algorithmic English syllabification based on vowel nuclei and maximal onset
+ */
+function algorithmicSyllabify(word) {
+  if (word.length <= 3) return [word];
+
+  const isVowel = (c) => /[aeiouy]/i.test(c);
+  const vowels = [];
+  let inVowelGroup = false;
+
+  for (let i = 0; i < word.length; i++) {
+    // Treat silent terminal 'e' (unless only vowel or ending in '-le')
+    if (i === word.length - 1 && word[i] === 'e' && vowels.length > 0 && word[i - 1] !== 'l') {
+      continue;
+    }
+    if (isVowel(word[i])) {
+      if (!inVowelGroup) {
+        vowels.push(i);
+        inVowelGroup = true;
+      }
+    } else {
+      inVowelGroup = false;
+    }
+  }
+
+  if (vowels.length <= 1) return [word];
+
+  const cuts = [];
+  for (let v = 0; v < vowels.length - 1; v++) {
+    const v1 = vowels[v];
+    const v2 = vowels[v + 1];
+    const consCount = v2 - (v1 + 1);
+
+    if (consCount <= 0) {
+      // Vowel hiatus (e.g. di-et)
+      cuts.push(v1 + 1);
+    } else if (consCount === 1) {
+      // Single consonant: goes with second syllable (V-CV)
+      cuts.push(v1 + 1);
+    } else if (consCount === 2) {
+      // Two consonants: split between them (VC-CV)
+      cuts.push(v1 + 2);
+    } else {
+      // 3+ consonants: keep first with coda, rest with onset
+      cuts.push(v1 + 2);
+    }
+  }
+
+  const result = [];
+  let start = 0;
+  for (const cut of cuts) {
+    if (cut > start && cut < word.length) {
+      result.push(word.slice(start, cut));
+      start = cut;
+    }
+  }
+  if (start < word.length) {
+    result.push(word.slice(start));
+  }
+  return result.length > 0 ? result : [word];
+}
+
+/**
+ * Determines the primary stressed syllable index using English phonotactic suffix heuristics
+ */
+function determineStressedSyllable(word, syllables) {
+  const len = syllables.length;
+  if (len <= 1) return 0;
+  if (len === 2) {
+    if (/(?:ceive|fer|mit|pel|vide|press|voke)$/.test(word)) return 1;
+    return 0; // Default 2-syllable noun/adj stress on 1st
+  }
+  // Suffixes with penultimate stress (stress on syllable immediately preceding suffix):
+  if (/(?:tion|sion|ic|ical|ity|ious|ian)$/.test(word)) {
+    return Math.max(0, len - 2);
+  }
+  // Suffixes with antepenultimate stress (3rd from end):
+  if (/(?:ate|ize|ise|ous|ment|able|al|y)$/.test(word)) {
+    return Math.max(0, len - 3);
+  }
+  // Polysyllabic general rule: penultimate or antepenultimate
+  return Math.max(0, len - 2);
+}
+
+// Attach static helpers
+SpeechEngine.calculateWordSimilarity = calculateWordSimilarity;
+SpeechEngine.getWordSyllableAndStress = getWordSyllableAndStress;
+SpeechEngine.levenshteinDistance = levenshteinDistance;
 
 
   // ==========================================
@@ -17714,6 +18160,14 @@ class FluentEdgeApp {
     this.lastEvaluationResult = null;
     this.meetsC1Threshold = false;
     this.currentStage = 1;
+
+    // Individual Word Practice (Repeat-After-Me Drill) state
+    this.practiceQueue = [];
+    this.practiceCurrentIndex = 0;
+    this.masteredPracticeWords = new Set();
+    this.practiceSpeed = 0.85;
+    this.currentWordPracticeController = null;
+    this.isPracticingWord = false;
 
     this.dom = {};
     this.init();
@@ -17761,6 +18215,7 @@ class FluentEdgeApp {
       stage1Panel: document.getElementById('stage1Panel'),
       stage2Panel: document.getElementById('stage2Panel'),
       speakingStudio: document.getElementById('speakingStudio'),
+      chromeOriginNotice: document.getElementById('chromeOriginNotice'),
       proceedToStage2Btn: document.getElementById('proceedToStage2Btn'),
       backToStage1Btn: document.getElementById('backToStage1Btn'),
       writingTopicPill: document.getElementById('writingTopicPill'),
@@ -17885,7 +18340,34 @@ class FluentEdgeApp {
       aiPromptFocusBadge: document.getElementById('aiPromptFocusBadge'),
       aiPromptVocabChips: document.getElementById('aiPromptVocabChips'),
       aiPromptVocabCount: document.getElementById('aiPromptVocabCount'),
-      aiPromptTextarea: document.getElementById('aiPromptTextarea')
+      aiPromptTextarea: document.getElementById('aiPromptTextarea'),
+
+      // Individual Word Practice Modal Elements
+      wordPracticeModalBackdrop: document.getElementById('wordPracticeModalBackdrop'),
+      closeWordPracticeModalBtn: document.getElementById('closeWordPracticeModalBtn'),
+      wordPracticeStepPill: document.getElementById('wordPracticeStepPill'),
+      wordPracticeTargetWord: document.getElementById('wordPracticeTargetWord'),
+      wordPracticePosBadge: document.getElementById('wordPracticePosBadge'),
+      wordPracticeSyllables: document.getElementById('wordPracticeSyllables'),
+      wordPracticeDefBox: document.getElementById('wordPracticeDefBox'),
+      wordPracticeDefText: document.getElementById('wordPracticeDefText'),
+      wordPracticePlayModelBtn: document.getElementById('wordPracticePlayModelBtn'),
+      wordPracticeModelBtnLabel: document.getElementById('wordPracticeModelBtnLabel'),
+      wordPracticeSpeedSlowBtn: document.getElementById('wordPracticeSpeedSlowBtn'),
+      wordPracticeSpeedNormalBtn: document.getElementById('wordPracticeSpeedNormalBtn'),
+      wordPracticeVoiceTag: document.getElementById('wordPracticeVoiceTag'),
+      wordPracticeMicBtn: document.getElementById('wordPracticeMicBtn'),
+      wordPracticeMicStatusLabel: document.getElementById('wordPracticeMicStatusLabel'),
+      wordPracticeMicStatusHint: document.getElementById('wordPracticeMicStatusHint'),
+      wordPracticeScoreBadge: document.getElementById('wordPracticeScoreBadge'),
+      wordPracticeScorePct: document.getElementById('wordPracticeScorePct'),
+      wordPracticeMeterFill: document.getElementById('wordPracticeMeterFill'),
+      wordPracticeTargetDisplay: document.getElementById('wordPracticeTargetDisplay'),
+      wordPracticeSpokenDisplay: document.getElementById('wordPracticeSpokenDisplay'),
+      wordPracticeFeedbackText: document.getElementById('wordPracticeFeedbackText'),
+      wordPracticePrevBtn: document.getElementById('wordPracticePrevBtn'),
+      wordPracticeNextBtn: document.getElementById('wordPracticeNextBtn'),
+      wordPracticeMasteredSummary: document.getElementById('wordPracticeMasteredSummary')
     };
   }
 
@@ -18074,6 +18556,34 @@ class FluentEdgeApp {
         this.handleQuickCopyAiPrompt(true);
       });
     }
+
+    // Individual Word Practice Modal events
+    if (this.dom.closeWordPracticeModalBtn) {
+      this.dom.closeWordPracticeModalBtn.addEventListener('click', () => this.closeWordPracticeModal());
+    }
+    if (this.dom.wordPracticeModalBackdrop) {
+      this.dom.wordPracticeModalBackdrop.addEventListener('click', (e) => {
+        if (e.target === this.dom.wordPracticeModalBackdrop) this.closeWordPracticeModal();
+      });
+    }
+    if (this.dom.wordPracticePlayModelBtn) {
+      this.dom.wordPracticePlayModelBtn.addEventListener('click', () => this.playCurrentPracticeModelAudio());
+    }
+    if (this.dom.wordPracticeSpeedSlowBtn) {
+      this.dom.wordPracticeSpeedSlowBtn.addEventListener('click', () => this.setPracticeSpeed(0.7));
+    }
+    if (this.dom.wordPracticeSpeedNormalBtn) {
+      this.dom.wordPracticeSpeedNormalBtn.addEventListener('click', () => this.setPracticeSpeed(0.85));
+    }
+    if (this.dom.wordPracticeMicBtn) {
+      this.dom.wordPracticeMicBtn.addEventListener('click', () => this.toggleWordPracticeRecording());
+    }
+    if (this.dom.wordPracticePrevBtn) {
+      this.dom.wordPracticePrevBtn.addEventListener('click', () => this.prevWordPractice());
+    }
+    if (this.dom.wordPracticeNextBtn) {
+      this.dom.wordPracticeNextBtn.addEventListener('click', () => this.nextWordPractice());
+    }
   }
 
   bindHotkeys() {
@@ -18109,11 +18619,24 @@ class FluentEdgeApp {
         }
       }
 
+      const wordPracticeOpen = this.dom.wordPracticeModalBackdrop && (
+        this.dom.wordPracticeModalBackdrop.classList.contains('open') ||
+        this.dom.wordPracticeModalBackdrop.style.display === 'flex'
+      );
+
+      // Escape when word practice modal is open
+      if (wordPracticeOpen && e.key === 'Escape') {
+        e.preventDefault();
+        this.closeWordPracticeModal();
+        return;
+      }
+
       const modalOpen = (this.dom.evalModalBackdrop.classList.contains('visible') ||
                         this.dom.evalModalBackdrop.style.display === 'flex' ||
                         this.dom.evalModalBackdrop.classList.contains('open')) ||
                         Boolean(reqAlertOpen) ||
-                        Boolean(aiPromptOpen);
+                        Boolean(aiPromptOpen) ||
+                        Boolean(wordPracticeOpen);
       const inTextField = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
 
       // Alt+1  →  Stage 1 (Topic & Lexis Educational Guide)
@@ -18487,6 +19010,9 @@ class FluentEdgeApp {
       }
       this.handleEditorInput();
     } else if (stageNum === 3) {
+      if (this.dom.chromeOriginNotice) {
+        this.dom.chromeOriginNotice.style.display = window.location.protocol === 'file:' ? 'block' : 'none';
+      }
       const text = this.dom.essayInput ? this.dom.essayInput.value.trim() : "";
       if (text) {
         this.speechEngine.setTargetText(text);
@@ -19802,27 +20328,47 @@ class FluentEdgeApp {
       <!-- Specific Word-Level Pronunciation Diagnostics -->
       <div class="speaking-diagnostic-section">
         ${deviated.length > 0 ? `
-          <div class="diagnostic-title">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
-            <span>Words Needing Pronunciation Refinement (${deviated.length} detected)</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 10px;">
+            <div class="diagnostic-title" style="margin-bottom: 0;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+              <span>Words Needing Pronunciation Refinement (${deviated.length} detected)</span>
+            </div>
+            <button type="button" class="btn btn-emerald btn-sm start-word-drill-btn" id="startFullWordDrillBtn" title="Launch interactive repeat-after-me drill for all flagged words">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+              <span>Start Word Practice Drill (${deviated.length} words)</span>
+            </button>
           </div>
           <div class="diagnostic-desc">
-            These words exhibited minor phoneme deviations, slurred endings, or vowel reduction irregularities. Click the speaker icon on any word to hear native model pronunciation:
+            These words exhibited minor phoneme deviations, slurred endings, or vowel reduction irregularities. Click the microphone icon to practice with real-time feedback, or the speaker icon for model pronunciation:
           </div>
           <div class="word-diagnostic-grid">
-            ${deviated.map(w => `
-              <div class="diagnostic-word-pill deviation">
-                <span>${w}</span>
-                <button class="diagnostic-word-btn" data-word="${w.toLowerCase().replace(/[^a-z0-9]/g, '')}" title="Hear '${w}' model pronunciation">
+            ${deviated.map(w => {
+              const clean = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const isMastered = this.masteredPracticeWords.has(clean);
+              return `
+              <div class="diagnostic-word-pill deviation ${isMastered ? 'mastered-in-drill' : ''}" data-word-pill="${clean}">
+                <span>${isMastered ? '✓ ' : ''}${w}</span>
+                <button type="button" class="diagnostic-word-btn" data-word="${clean}" title="Hear '${w}' model pronunciation">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
                 </button>
+                <button type="button" class="diagnostic-word-practice-btn" data-word="${w}" title="Practice pronouncing '${w}' in repeat-after-me drill">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                </button>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         ` : `
-          <div class="diagnostic-title" style="color: var(--emerald);">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
-            <span>Zero Significant Phonetic Deviations</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 10px;">
+            <div class="diagnostic-title" style="color: var(--emerald); margin-bottom: 0;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>Zero Significant Phonetic Deviations</span>
+            </div>
+            ${mastered.length > 0 ? `
+              <button type="button" class="btn btn-secondary btn-sm start-word-drill-btn" id="startFullWordDrillBtn" title="Practice key polysyllabic lexis in repeat-after-me drill">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                <span>Practice Polysyllabic Lexis (${mastered.length} words)</span>
+              </button>
+            ` : ''}
           </div>
           <div class="diagnostic-desc" style="color: var(--emerald);">
             Phenomenal articulation! All attempted words met high phonetic confidence thresholds without noticeable slurring or mispronunciations.
@@ -19838,14 +20384,20 @@ class FluentEdgeApp {
             These terms were bypassed during speech stream capture. When reading aloud, maintain steady horizontal eye-tracking:
           </div>
           <div class="word-diagnostic-grid">
-            ${omitted.map(w => `
-              <div class="diagnostic-word-pill omitted">
-                <span>${w}</span>
-                <button class="diagnostic-word-btn" data-word="${w.toLowerCase().replace(/[^a-z0-9]/g, '')}" title="Hear '${w}' model pronunciation">
+            ${omitted.map(w => {
+              const clean = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const isMastered = this.masteredPracticeWords.has(clean);
+              return `
+              <div class="diagnostic-word-pill omitted ${isMastered ? 'mastered-in-drill' : ''}" data-word-pill="${clean}">
+                <span>${isMastered ? '✓ ' : ''}${w}</span>
+                <button type="button" class="diagnostic-word-btn" data-word="${clean}" title="Hear '${w}' model pronunciation">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
                 </button>
+                <button type="button" class="diagnostic-word-practice-btn" data-word="${w}" title="Practice pronouncing '${w}' in repeat-after-me drill">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                </button>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         ` : ''}
 
@@ -19855,14 +20407,20 @@ class FluentEdgeApp {
             <span>High-Precision Advanced Lexis (${mastered.length} polysyllabic terms)</span>
           </div>
           <div class="word-diagnostic-grid">
-            ${mastered.map(w => `
-              <div class="diagnostic-word-pill mastered">
+            ${mastered.map(w => {
+              const clean = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const isMastered = this.masteredPracticeWords.has(clean);
+              return `
+              <div class="diagnostic-word-pill mastered ${isMastered ? 'mastered-in-drill' : ''}" data-word-pill="${clean}">
                 <span>✓ ${w}</span>
-                <button class="diagnostic-word-btn" data-word="${w.toLowerCase().replace(/[^a-z0-9]/g, '')}" title="Hear '${w}' model pronunciation">
+                <button type="button" class="diagnostic-word-btn" data-word="${clean}" title="Hear '${w}' model pronunciation">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon><path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path></svg>
                 </button>
+                <button type="button" class="diagnostic-word-practice-btn" data-word="${w}" title="Practice pronouncing '${w}' in repeat-after-me drill">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v1a7 7 0 0 1-14 0v-1"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+                </button>
               </div>
-            `).join('')}
+            `}).join('')}
           </div>
         ` : ''}
       </div>
@@ -19956,6 +20514,26 @@ class FluentEdgeApp {
       });
     });
 
+    // Bind individual word practice drill buttons on word pills
+    this.dom.speakingReportPanel.querySelectorAll('.diagnostic-word-practice-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const word = btn.getAttribute('data-word');
+        if (word) {
+          const queue = deviated.length > 0 ? deviated : [word];
+          this.openWordPracticeDrill(queue, word);
+        }
+      });
+    });
+
+    // Bind primary "Start Word Practice Drill" action button
+    document.getElementById('startFullWordDrillBtn')?.addEventListener('click', () => {
+      const targetWords = deviated.length > 0 ? deviated : (mastered.length > 0 ? mastered : []);
+      if (targetWords.length > 0) {
+        this.openWordPracticeDrill(targetWords);
+      }
+    });
+
     // Bind retry button in report
     document.getElementById('reportRetrySpeakingBtn')?.addEventListener('click', () => {
       this.retrySpeakingSession();
@@ -19975,6 +20553,397 @@ class FluentEdgeApp {
     this.speechEngine.stopSpeakingModel();
     this.dom.playModelAudioBtn.style.display = 'inline-flex';
     this.dom.stopModelAudioBtn.style.display = 'none';
+  }
+
+  // ==========================================
+  // INDIVIDUAL WORD PRACTICE (REPEAT-AFTER-ME DRILL)
+  // ==========================================
+
+  openWordPracticeDrill(wordList = [], initialWord = null) {
+    if (!wordList || wordList.length === 0) return;
+
+    // Filter unique words and preserve order
+    const uniqueWords = Array.from(new Set(wordList.map(w => w.trim()).filter(Boolean)));
+    if (uniqueWords.length === 0) return;
+
+    this.practiceQueue = uniqueWords;
+
+    // Find initial word index if provided
+    let targetIdx = 0;
+    if (initialWord) {
+      const cleanInit = initialWord.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const foundIdx = this.practiceQueue.findIndex(w => w.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanInit);
+      if (foundIdx !== -1) targetIdx = foundIdx;
+    }
+    this.practiceCurrentIndex = targetIdx;
+
+    if (!this.dom.wordPracticeModalBackdrop) return;
+
+    this.dom.wordPracticeModalBackdrop.style.display = 'flex';
+    requestAnimationFrame(() => {
+      this.dom.wordPracticeModalBackdrop.classList.add('open');
+    });
+
+    this.renderCurrentWordPractice();
+  }
+
+  renderCurrentWordPractice() {
+    if (!this.practiceQueue || this.practiceQueue.length === 0) return;
+
+    const currentWord = this.practiceQueue[this.practiceCurrentIndex] || '';
+    const cleanWord = currentWord.toLowerCase().trim().replace(/[^a-z]/g, '');
+
+    // Stepper & summary
+    if (this.dom.wordPracticeStepPill) {
+      this.dom.wordPracticeStepPill.textContent = `Word ${this.practiceCurrentIndex + 1} of ${this.practiceQueue.length}`;
+    }
+    this.updatePracticeMasteredSummary();
+
+    // Target word & syllable breakdown
+    if (this.dom.wordPracticeTargetWord) {
+      this.dom.wordPracticeTargetWord.textContent = currentWord;
+    }
+
+    const phonetics = this.speechEngine.getWordSyllableAndStress(cleanWord);
+    if (this.dom.wordPracticeSyllables) {
+      this.dom.wordPracticeSyllables.innerHTML = phonetics.formattedHtml || phonetics.formattedText || currentWord;
+    }
+
+    // Definition & part of speech
+    const { pos, definition, cefr } = this.findWordDefinitionAndPos(cleanWord);
+    if (this.dom.wordPracticePosBadge) {
+      this.dom.wordPracticePosBadge.textContent = `${pos || 'lexis'} · ${cefr || this.targetLevel}`;
+    }
+    if (this.dom.wordPracticeDefText) {
+      this.dom.wordPracticeDefText.textContent = definition || `C1/C2 advanced lexis: calibrate your articulation and tonic stress against the native model.`;
+    }
+
+    // Voice tag
+    if (this.dom.wordPracticeVoiceTag) {
+      const voiceInfo = this.speechEngine.getVoiceInfo ? this.speechEngine.getVoiceInfo() : null;
+      const voiceName = voiceInfo ? voiceInfo.name : 'RP Native Model';
+      this.dom.wordPracticeVoiceTag.textContent = `${voiceName}`;
+    }
+
+    // Reset Model Audio playing button
+    if (this.dom.wordPracticePlayModelBtn) {
+      this.dom.wordPracticePlayModelBtn.classList.remove('playing');
+    }
+    if (this.dom.wordPracticeModelBtnLabel) {
+      this.dom.wordPracticeModelBtnLabel.textContent = 'Listen to Native Model';
+    }
+
+    // Reset Microphone Recording State
+    this.resetWordPracticeMicState();
+
+    // Check if word is already mastered
+    const isMastered = this.masteredPracticeWords.has(cleanWord);
+
+    if (this.dom.wordPracticeScoreBadge) {
+      this.dom.wordPracticeScoreBadge.className = isMastered 
+        ? 'word-practice-score-badge status-mastered' 
+        : 'word-practice-score-badge status-awaiting';
+      this.dom.wordPracticeScoreBadge.textContent = isMastered ? '✓ Mastered' : 'Awaiting Attempt';
+    }
+
+    if (this.dom.wordPracticeScorePct) {
+      this.dom.wordPracticeScorePct.textContent = isMastered ? '100%' : '--%';
+    }
+
+    if (this.dom.wordPracticeMeterFill) {
+      this.dom.wordPracticeMeterFill.className = isMastered 
+        ? 'word-practice-meter-fill meter-mastered' 
+        : 'word-practice-meter-fill';
+      this.dom.wordPracticeMeterFill.style.width = isMastered ? '100%' : '0%';
+    }
+
+    if (this.dom.wordPracticeTargetDisplay) {
+      this.dom.wordPracticeTargetDisplay.textContent = currentWord;
+    }
+    if (this.dom.wordPracticeSpokenDisplay) {
+      this.dom.wordPracticeSpokenDisplay.textContent = isMastered ? `"${cleanWord}"` : '—';
+    }
+
+    if (this.dom.wordPracticeFeedbackText) {
+      this.dom.wordPracticeFeedbackText.textContent = isMastered
+        ? `Target RP standard achieved! Tap microphone to practice again or proceed to next word.`
+        : `Click 'Listen to Native Model' to absorb the syllable stress rhythm, then tap the microphone.`;
+    }
+
+    // Navigation buttons state
+    if (this.dom.wordPracticePrevBtn) {
+      this.dom.wordPracticePrevBtn.disabled = (this.practiceCurrentIndex === 0);
+    }
+    if (this.dom.wordPracticeNextBtn) {
+      const isLast = (this.practiceCurrentIndex === this.practiceQueue.length - 1);
+      this.dom.wordPracticeNextBtn.innerHTML = isLast 
+        ? `<span>Finish Drill ✓</span>` 
+        : `<span>Next Word →</span>`;
+    }
+  }
+
+  playCurrentPracticeModelAudio() {
+    if (!this.practiceQueue || this.practiceQueue.length === 0) return;
+    const currentWord = this.practiceQueue[this.practiceCurrentIndex];
+    if (!currentWord) return;
+
+    if (this.dom.wordPracticePlayModelBtn) {
+      this.dom.wordPracticePlayModelBtn.classList.add('playing');
+    }
+    if (this.dom.wordPracticeModelBtnLabel) {
+      this.dom.wordPracticeModelBtnLabel.textContent = 'Model Playing...';
+    }
+
+    this.speechEngine.speakVocabWord(
+      currentWord,
+      this.practiceSpeed || 0.85,
+      () => {},
+      () => {
+        if (this.dom.wordPracticePlayModelBtn) {
+          this.dom.wordPracticePlayModelBtn.classList.remove('playing');
+        }
+        if (this.dom.wordPracticeModelBtnLabel) {
+          this.dom.wordPracticeModelBtnLabel.textContent = 'Listen to Native Model';
+        }
+      }
+    );
+  }
+
+  setPracticeSpeed(speed) {
+    this.practiceSpeed = speed;
+    if (this.dom.wordPracticeSpeedSlowBtn && this.dom.wordPracticeSpeedNormalBtn) {
+      if (speed <= 0.75) {
+        this.dom.wordPracticeSpeedSlowBtn.classList.add('active');
+        this.dom.wordPracticeSpeedNormalBtn.classList.remove('active');
+      } else {
+        this.dom.wordPracticeSpeedSlowBtn.classList.remove('active');
+        this.dom.wordPracticeSpeedNormalBtn.classList.add('active');
+      }
+    }
+  }
+
+  toggleWordPracticeRecording() {
+    if (this.isPracticingWord) {
+      this.stopWordPracticeRecording();
+    } else {
+      this.startWordPracticeRecording();
+    }
+  }
+
+  startWordPracticeRecording() {
+    if (!this.practiceQueue || this.practiceQueue.length === 0) return;
+    const currentWord = this.practiceQueue[this.practiceCurrentIndex];
+    if (!currentWord) return;
+
+    // Stop model playback if running
+    this.speechEngine.stopSpeakingModel();
+    if (this.dom.wordPracticePlayModelBtn) {
+      this.dom.wordPracticePlayModelBtn.classList.remove('playing');
+    }
+    if (this.dom.wordPracticeModelBtnLabel) {
+      this.dom.wordPracticeModelBtnLabel.textContent = 'Listen to Native Model';
+    }
+
+    this.isPracticingWord = true;
+
+    if (this.dom.wordPracticeMicBtn) {
+      this.dom.wordPracticeMicBtn.classList.add('listening');
+    }
+    if (this.dom.wordPracticeMicStatusLabel) {
+      this.dom.wordPracticeMicStatusLabel.textContent = 'Listening... Speak the word now';
+    }
+    if (this.dom.wordPracticeMicStatusHint) {
+      this.dom.wordPracticeMicStatusHint.textContent = `Say "${currentWord}" clearly into your microphone`;
+    }
+    if (this.dom.wordPracticeSpokenDisplay) {
+      this.dom.wordPracticeSpokenDisplay.textContent = 'Listening...';
+    }
+
+    this.currentWordPracticeController = this.speechEngine.evaluateSingleWordPronunciation(currentWord, {
+      onListening: () => {
+        if (this.dom.wordPracticeMicBtn) this.dom.wordPracticeMicBtn.classList.add('listening');
+      },
+      onInterim: (interim) => {
+        if (this.dom.wordPracticeSpokenDisplay && interim) {
+          this.dom.wordPracticeSpokenDisplay.textContent = `"${interim}..."`;
+        }
+      },
+      onResult: (result) => {
+        this.handleWordPracticeResult(result);
+      },
+      onError: (errMsg) => {
+        this.handleWordPracticeError(errMsg);
+      },
+      onEnd: () => {
+        this.resetWordPracticeMicState();
+      }
+    });
+  }
+
+  stopWordPracticeRecording() {
+    if (this.currentWordPracticeController) {
+      this.currentWordPracticeController.stop();
+      this.currentWordPracticeController = null;
+    }
+    this.resetWordPracticeMicState();
+  }
+
+  resetWordPracticeMicState() {
+    this.isPracticingWord = false;
+    if (this.dom.wordPracticeMicBtn) {
+      this.dom.wordPracticeMicBtn.classList.remove('listening');
+    }
+    if (this.dom.wordPracticeMicStatusLabel) {
+      this.dom.wordPracticeMicStatusLabel.textContent = 'Tap to Speak (Repeat After Me)';
+    }
+    if (this.dom.wordPracticeMicStatusHint) {
+      if (window.location.protocol === 'file:') {
+        this.dom.wordPracticeMicStatusHint.innerHTML = `Listen to the model above, then pronounce the word clearly.<br><span style="color:#fbbf24; font-size:11px;">⚠️ On <code>file://</code>, Chrome asks permission on every tap. Open <a href="http://localhost:8080/" style="color:#6ee7b7; text-decoration:underline;">localhost:8080</a> to allow permanently.</span>`;
+      } else {
+        this.dom.wordPracticeMicStatusHint.textContent = 'Listen to the model above, then pronounce the word clearly into your microphone';
+      }
+    }
+  }
+
+  handleWordPracticeResult(result) {
+    this.resetWordPracticeMicState();
+    if (!result) return;
+
+    const { similarityPct, isMastered, status, feedback, spokenWord, targetWord } = result;
+
+    if (this.dom.wordPracticeScorePct) {
+      this.dom.wordPracticeScorePct.textContent = `${similarityPct}%`;
+    }
+
+    if (this.dom.wordPracticeMeterFill) {
+      this.dom.wordPracticeMeterFill.style.width = `${similarityPct}%`;
+      this.dom.wordPracticeMeterFill.className = `word-practice-meter-fill meter-${status}`;
+    }
+
+    if (this.dom.wordPracticeScoreBadge) {
+      this.dom.wordPracticeScoreBadge.className = `word-practice-score-badge status-${status}`;
+      this.dom.wordPracticeScoreBadge.textContent = isMastered 
+        ? '✓ Mastered' 
+        : status === 'close' 
+        ? 'Minor Deviation' 
+        : 'Phonetic Revision Needed';
+    }
+
+    if (this.dom.wordPracticeSpokenDisplay) {
+      this.dom.wordPracticeSpokenDisplay.textContent = `"${spokenWord || 'unclear'}"`;
+    }
+
+    if (this.dom.wordPracticeFeedbackText) {
+      this.dom.wordPracticeFeedbackText.textContent = feedback;
+    }
+
+    if (isMastered) {
+      const clean = targetWord.toLowerCase().replace(/[^a-z0-9]/g, '');
+      this.masteredPracticeWords.add(clean);
+      this.updatePracticeMasteredSummary();
+      this.updateReportPillMastered(clean);
+    }
+  }
+
+  handleWordPracticeError(errMsg) {
+    this.resetWordPracticeMicState();
+    if (this.dom.wordPracticeFeedbackText) {
+      this.dom.wordPracticeFeedbackText.textContent = errMsg;
+    }
+    if (this.dom.wordPracticeSpokenDisplay) {
+      this.dom.wordPracticeSpokenDisplay.textContent = '—';
+    }
+  }
+
+  updatePracticeMasteredSummary() {
+    if (!this.dom.wordPracticeMasteredSummary || !this.practiceQueue) return;
+    const masteredCount = this.countMasteredInQueue();
+    this.dom.wordPracticeMasteredSummary.textContent = `${masteredCount} of ${this.practiceQueue.length} Mastered`;
+  }
+
+  countMasteredInQueue() {
+    if (!this.practiceQueue) return 0;
+    return this.practiceQueue.filter(w => {
+      const clean = w.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return this.masteredPracticeWords.has(clean);
+    }).length;
+  }
+
+  updateReportPillMastered(cleanWord) {
+    if (!this.dom.speakingReportPanel) return;
+    const pill = this.dom.speakingReportPanel.querySelector(`[data-word-pill="${cleanWord}"]`);
+    if (pill) {
+      pill.classList.add('mastered-in-drill');
+      const span = pill.querySelector('span');
+      if (span && !span.textContent.startsWith('✓')) {
+        span.textContent = `✓ ${span.textContent.trim()}`;
+      }
+    }
+  }
+
+  nextWordPractice() {
+    this.stopWordPracticeRecording();
+    this.speechEngine.stopSpeakingModel();
+
+    if (this.practiceCurrentIndex < this.practiceQueue.length - 1) {
+      this.practiceCurrentIndex++;
+      this.renderCurrentWordPractice();
+    } else {
+      // Completed drill queue
+      this.closeWordPracticeModal();
+    }
+  }
+
+  prevWordPractice() {
+    this.stopWordPracticeRecording();
+    this.speechEngine.stopSpeakingModel();
+
+    if (this.practiceCurrentIndex > 0) {
+      this.practiceCurrentIndex--;
+      this.renderCurrentWordPractice();
+    }
+  }
+
+  closeWordPracticeModal() {
+    this.stopWordPracticeRecording();
+    this.speechEngine.stopSpeakingModel();
+
+    if (!this.dom.wordPracticeModalBackdrop) return;
+    this.dom.wordPracticeModalBackdrop.classList.remove('open');
+    setTimeout(() => {
+      this.dom.wordPracticeModalBackdrop.style.display = 'none';
+    }, 250);
+  }
+
+  findWordDefinitionAndPos(cleanWord) {
+    // 1. Search in active vocabulary
+    if (this.activeVocabulary && this.activeVocabulary.length > 0) {
+      const foundActive = this.activeVocabulary.find(v => {
+        const h = (v.headword || v.word || '').toLowerCase().replace(/[^a-z]/g, '');
+        return h === cleanWord;
+      });
+      if (foundActive) {
+        return {
+          pos: foundActive.pos || '',
+          definition: foundActive.definition || '',
+          cefr: foundActive.cefr || this.targetLevel
+        };
+      }
+    }
+
+    // 2. Search in global vocabulary lexicon
+    if (typeof VOCABULARY_LEXICON !== 'undefined' && Array.isArray(VOCABULARY_LEXICON)) {
+      const foundLex = VOCABULARY_LEXICON.find(v => (v.headword || '').toLowerCase() === cleanWord);
+      if (foundLex) {
+        return {
+          pos: foundLex.pos || '',
+          definition: foundLex.definition || '',
+          cefr: foundLex.cefr || 'C1'
+        };
+      }
+    }
+
+    return { pos: 'advanced lexis', definition: '', cefr: this.targetLevel };
   }
 
   formatSeconds(totalSeconds) {
